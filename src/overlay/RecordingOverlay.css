@@ -1,11 +1,18 @@
 .recording-overlay {
+  --overlay-accent: #4bb8ff;
+  --overlay-accent-soft: #4bb8ff33;
+  --overlay-surface: #05101fcc;
+  --overlay-muted: #a9c7df;
+  --overlay-muted-strong: #d8efff;
+  --overlay-skip: #80b6db;
+
   height: 48px;
   width: 224px;
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
   padding: 6px;
-  background: #000000cc;
+  background: var(--overlay-surface);
   border-radius: 18px;
   opacity: 0;
   transition: opacity 300ms ease-out;
@@ -42,7 +49,7 @@
 
 .bar {
   width: 6px;
-  background: #ffe5ee;
+  background: var(--overlay-accent);
   max-height: 20px;
   border-radius: 2px;
   transition: height 80ms linear;
@@ -67,7 +74,7 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
-  color: #f8cfe0;
+  color: var(--overlay-muted);
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 9px;
@@ -77,11 +84,11 @@
 }
 
 .diagnostics-status {
-  color: #ffe5ee;
+  color: var(--overlay-muted-strong);
 }
 
 .diagnostics-status.skip {
-  color: #f6b8d3;
+  color: var(--overlay-skip);
 }
 
 .diagnostics-status.finish {
@@ -126,7 +133,7 @@
 }
 
 .cancel-button:hover {
-  background: #faa2ca33;
+  background: var(--overlay-accent-soft);
   transform: scale(1.05);
 }
 
