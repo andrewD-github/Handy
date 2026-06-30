@@ -170,12 +170,26 @@ pub enum KeyboardImplementation {
     HandyKeys,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum DictationStabilityMode {
+    FastLive,
+    StableLive,
+    FinalOnly,
+}
+
 impl Default for KeyboardImplementation {
     fn default() -> Self {
         #[cfg(target_os = "linux")]
         return KeyboardImplementation::Tauri;
         #[cfg(not(target_os = "linux"))]
         return KeyboardImplementation::HandyKeys;
+    }
+}
+
+impl Default for DictationStabilityMode {
+    fn default() -> Self {
+        DictationStabilityMode::StableLive
     }
 }
 
@@ -338,6 +352,14 @@ impl std::ops::DerefMut for SecretMap {
 pub struct AppSettings {
     pub bindings: HashMap<String, ShortcutBinding>,
     pub push_to_talk: bool,
+    #[serde(default)]
+    pub dictation_stability_mode: DictationStabilityMode,
+    #[serde(default = "default_voice_finish_trigger_enabled")]
+    pub voice_finish_trigger_enabled: bool,
+    #[serde(default = "default_voice_finish_phrases")]
+    pub voice_finish_phrases: Vec<String>,
+    #[serde(default)]
+    pub voice_finish_phrase_variants: Vec<String>,
     pub audio_feedback: bool,
     #[serde(default = "default_audio_feedback_volume")]
     pub audio_feedback_volume: f32,
@@ -369,10 +391,16 @@ pub struct AppSettings {
     pub debug_mode: bool,
     #[serde(default = "default_log_level")]
     pub log_level: LogLevel,
+    #[serde(default = "default_diagnostic_capture_enabled")]
+    pub diagnostic_capture_enabled: bool,
+    #[serde(default = "default_diagnostic_retention_days")]
+    pub diagnostic_retention_days: u32,
     #[serde(default)]
     pub custom_words: Vec<String>,
     #[serde(default)]
     pub model_unload_timeout: ModelUnloadTimeout,
+    #[serde(default)]
+    pub game_mode_auto_unload: bool,
     #[serde(default = "default_word_correction_threshold")]
     pub word_correction_threshold: f64,
     #[serde(default = "default_history_limit")]
@@ -475,6 +503,14 @@ fn default_log_level() -> LogLevel {
     LogLevel::Debug
 }
 
+fn default_diagnostic_capture_enabled() -> bool {
+    false
+}
+
+fn default_diagnostic_retention_days() -> u32 {
+    7
+}
+
 fn default_word_correction_threshold() -> f64 {
     0.18
 }
@@ -501,6 +537,18 @@ fn default_audio_feedback_volume() -> f32 {
 
 fn default_sound_theme() -> SoundTheme {
     SoundTheme::Marimba
+}
+
+fn default_voice_finish_phrases() -> Vec<String> {
+    vec![
+        "finish dictation".to_string(),
+        "end dictation".to_string(),
+        "send it".to_string(),
+    ]
+}
+
+fn default_voice_finish_trigger_enabled() -> bool {
+    true
 }
 
 fn default_post_process_enabled() -> bool {
@@ -767,6 +815,10 @@ pub fn get_default_settings() -> AppSettings {
     AppSettings {
         bindings,
         push_to_talk: true,
+        dictation_stability_mode: DictationStabilityMode::default(),
+        voice_finish_trigger_enabled: default_voice_finish_trigger_enabled(),
+        voice_finish_phrases: default_voice_finish_phrases(),
+        voice_finish_phrase_variants: Vec::new(),
         audio_feedback: false,
         audio_feedback_volume: default_audio_feedback_volume(),
         sound_theme: default_sound_theme(),
@@ -783,8 +835,11 @@ pub fn get_default_settings() -> AppSettings {
         overlay_position: default_overlay_position(),
         debug_mode: false,
         log_level: default_log_level(),
+        diagnostic_capture_enabled: default_diagnostic_capture_enabled(),
+        diagnostic_retention_days: default_diagnostic_retention_days(),
         custom_words: Vec::new(),
         model_unload_timeout: ModelUnloadTimeout::default(),
+        game_mode_auto_unload: false,
         word_correction_threshold: default_word_correction_threshold(),
         history_limit: default_history_limit(),
         recording_retention_period: default_recording_retention_period(),
@@ -985,5 +1040,20 @@ mod tests {
         let out = format!("{:?}", map);
         assert!(!out.contains("secret"));
         assert!(out.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn default_settings_enable_voice_finish_trigger() {
+        let settings = get_default_settings();
+
+        assert!(settings.voice_finish_trigger_enabled);
+        assert_eq!(
+            settings.voice_finish_phrases,
+            vec![
+                "finish dictation".to_string(),
+                "end dictation".to_string(),
+                "send it".to_string(),
+            ]
+        );
     }
 }

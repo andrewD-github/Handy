@@ -89,6 +89,16 @@ const settingUpdaters: {
   update_checks_enabled: (value) =>
     commands.changeUpdateChecksSetting(value as boolean),
   push_to_talk: (value) => commands.changePttSetting(value as boolean),
+  dictation_stability_mode: (value) =>
+    commands.changeDictationStabilityModeSetting(value as string),
+  voice_finish_trigger_enabled: (value) =>
+    commands.changeVoiceFinishTriggerEnabledSetting(value as boolean),
+  voice_finish_phrases: (value) =>
+    commands.updateVoiceFinishPhrases(value as string[]),
+  voice_finish_phrase_variants: (value) =>
+    commands.updateVoiceFinishPhraseVariants(value as string[]),
+  game_mode_auto_unload: (value) =>
+    commands.changeGameModeAutoUnloadSetting(value as boolean),
   selected_microphone: (value) =>
     commands.setSelectedMicrophone(
       (value as string) === "Default" || value === null
@@ -193,6 +203,17 @@ export const useSettingsStore = create<SettingsStore>()(
           const normalizedSettings: Settings = {
             ...settings,
             always_on_microphone: settings.always_on_microphone ?? false,
+            dictation_stability_mode:
+              settings.dictation_stability_mode ?? "stable_live",
+            voice_finish_trigger_enabled:
+              settings.voice_finish_trigger_enabled ?? true,
+            voice_finish_phrases: settings.voice_finish_phrases ?? [
+              "finish dictation",
+              "end dictation",
+              "send it",
+            ],
+            voice_finish_phrase_variants:
+              settings.voice_finish_phrase_variants ?? [],
             selected_microphone: settings.selected_microphone ?? "Default",
             clamshell_microphone: settings.clamshell_microphone ?? "Default",
             selected_output_device:

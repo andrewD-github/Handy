@@ -154,6 +154,21 @@ impl TranscriptionManager {
                             }
                         }
                     }
+
+                    if settings.game_mode_auto_unload
+                        && manager_cloned.is_model_loaded()
+                        && crate::game_mode::is_game_running()
+                    {
+                        let last = manager_cloned.last_activity.load(Ordering::Relaxed);
+                        let idle_ms = TranscriptionManager::now_ms().saturating_sub(last);
+
+                        if idle_ms > 4_000 {
+                            info!("Fullscreen app detected; unloading model to free GPU memory");
+                            if let Err(e) = manager_cloned.unload_model() {
+                                error!("Failed to unload model for game mode: {}", e);
+                            }
+                        }
+                    }
                 }
                 debug!("Idle watcher thread shutting down gracefully");
             });
@@ -478,6 +493,14 @@ impl TranscriptionManager {
             ));
         }
 
+        self.transcribe_with_unload(audio, true)
+    }
+
+    pub fn transcribe_chunk(&self, audio: Vec<f32>) -> Result<String> {
+        self.transcribe_with_unload(audio, false)
+    }
+
+    fn transcribe_with_unload(&self, audio: Vec<f32>, unload_after: bool) -> Result<String> {
         // Update last activity timestamp
         self.touch_activity();
 
@@ -487,7 +510,9 @@ impl TranscriptionManager {
 
         if audio.is_empty() {
             debug!("Empty audio vector");
-            self.maybe_unload_immediately("empty audio");
+            if unload_after {
+                self.maybe_unload_immediately("empty audio");
+            }
             return Ok(String::new());
         }
 
@@ -767,7 +792,9 @@ impl TranscriptionManager {
             info!("Transcription result: {}", final_result);
         }
 
-        self.maybe_unload_immediately("transcription");
+        if unload_after {
+            self.maybe_unload_immediately("transcription");
+        }
 
         Ok(final_result)
     }

@@ -210,8 +210,29 @@ impl HistoryManager {
         })
     }
 
-    pub fn recordings_dir(&self) -> &std::path::Path {
-        &self.recordings_dir
+    /// Save a transcription to history with its WAV recording.
+    pub async fn save_transcription(
+        &self,
+        audio_samples: Vec<f32>,
+        transcription_text: String,
+        post_process_requested: bool,
+        post_processed_text: Option<String>,
+        post_process_prompt: Option<String>,
+    ) -> Result<String> {
+        let file_name = format!("handy-{}.wav", Utc::now().timestamp());
+        let file_path = self.recordings_dir.join(&file_name);
+
+        crate::audio_toolkit::save_wav_file(&file_path, &audio_samples)?;
+
+        self.save_entry(
+            file_name.clone(),
+            transcription_text,
+            post_process_requested,
+            post_processed_text,
+            post_process_prompt,
+        )?;
+
+        Ok(file_name)
     }
 
     /// Save a new history entry to the database.

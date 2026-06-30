@@ -21,8 +21,9 @@ Handy isn't trying to be the best speech-to-text app—it's trying to be the mos
 
 1. **Press** a configurable keyboard shortcut to start/stop recording (or use push-to-talk mode)
 2. **Speak** your words while the shortcut is active
-3. **Release** and Handy processes your speech using Whisper
-4. **Get** your transcribed text pasted directly into whatever app you're using
+3. **Watch** live dictation appear progressively when a live stability mode is enabled
+4. **Finish** by pressing the shortcut again or saying a configured finish phrase
+5. **Get** a final full-utterance pass that can reconcile the live text for accuracy
 
 The process is entirely local:
 
@@ -31,6 +32,34 @@ The process is entirely local:
   - **Whisper models** (Small/Medium/Turbo/Large) with GPU acceleration when available
   - **Parakeet V3** - CPU-optimized model with excellent performance and automatic language detection
 - Works on Windows, macOS, and Linux
+
+## Dictation Workflow Additions
+
+This branch adds a dictation workflow aimed at long-form prompts, coding
+assistants, and ChatGPT-style text boxes.
+
+- **Progressive dictation** types live interim text while recording continues.
+- **Dictation Stability** modes let you choose between Stable Live, Fast Live,
+  and Final Only behavior.
+- **Voice Finish Trigger** lets spoken phrases such as `finish dictation`,
+  `end dictation`, or `send it` stop recording like pressing the transcribe
+  shortcut.
+- **Final reconciliation** runs a full transcript over the complete recording and
+  can replace the live text when the final pass is more accurate.
+- **Overlay diagnostics** show compact live edit metrics while recording.
+- **Diagnostic capture** can write per-session JSONL logs linked to saved WAV
+  files, so transcription speed, accuracy, and edit churn can be reviewed later.
+- **Accuracy scoring** includes a repeatable reference passage and WER/CER script.
+
+Full operator documentation is in
+[docs/dictation-workflow.md](docs/dictation-workflow.md).
+
+Useful review commands:
+
+```bash
+bun run diagnostics:summary
+python accuracy_test/score.py
+```
 
 ## Quick Start
 

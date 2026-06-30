@@ -3,7 +3,7 @@ use crate::input::{self, EnigoState};
 use crate::settings::TypingTool;
 use crate::settings::{get_settings, AutoSubmitKey, ClipboardHandling, PasteMethod};
 use enigo::{Direction, Enigo, Key, Keyboard};
-use log::info;
+use log::{info, warn};
 use std::process::Command;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -11,6 +11,50 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 #[cfg(target_os = "linux")]
 use crate::utils::{is_kde_wayland, is_wayland};
+
+#[derive(Debug, PartialEq, Eq)]
+struct ProgressiveReplacementEdit {
+    kept_prefix_chars: usize,
+    backspaces: usize,
+    insertion: String,
+}
+
+fn common_prefix_boundary(left: &str, right: &str) -> (usize, usize) {
+    let mut prefix_bytes = 0;
+    let mut prefix_chars = 0;
+
+    for ((left_index, left_char), (_right_index, right_char)) in
+        left.char_indices().zip(right.char_indices())
+    {
+        if left_char != right_char {
+            break;
+        }
+
+        prefix_bytes = left_index + left_char.len_utf8();
+        prefix_chars += 1;
+    }
+
+    (prefix_bytes, prefix_chars)
+}
+
+fn progressive_replacement_edit(
+    previous_text: &str,
+    replacement_text: &str,
+) -> Option<ProgressiveReplacementEdit> {
+    if previous_text == replacement_text {
+        return None;
+    }
+
+    let (prefix_bytes, kept_prefix_chars) = common_prefix_boundary(previous_text, replacement_text);
+    let previous_suffix = &previous_text[prefix_bytes..];
+    let replacement_suffix = &replacement_text[prefix_bytes..];
+
+    Some(ProgressiveReplacementEdit {
+        kept_prefix_chars,
+        backspaces: previous_suffix.chars().count(),
+        insertion: replacement_suffix.to_string(),
+    })
+}
 
 /// Pastes text using the clipboard: saves current content, writes text, sends paste keystroke, restores clipboard.
 fn paste_via_clipboard(
@@ -662,6 +706,87 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+pub fn insert_progressive_text(text: String, app_handle: AppHandle) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+
+    let settings = get_settings(&app_handle);
+    let enigo_state = app_handle
+        .try_state::<EnigoState>()
+        .ok_or("Enigo state not initialized")?;
+    let mut enigo = enigo_state
+        .0
+        .lock()
+        .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
+
+    match paste_direct(
+        &mut enigo,
+        &text,
+        #[cfg(target_os = "linux")]
+        settings.typing_tool,
+    ) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            warn!(
+                "Direct progressive text insertion failed: {}. Falling back to clipboard paste.",
+                err
+            );
+            let fallback_method = match settings.paste_method {
+                PasteMethod::CtrlShiftV | PasteMethod::ShiftInsert => settings.paste_method,
+                _ => PasteMethod::CtrlV,
+            };
+            paste_via_clipboard(
+                &mut enigo,
+                &text,
+                &app_handle,
+                &fallback_method,
+                settings.paste_delay_ms,
+            )
+        }
+    }
+}
+
+pub fn replace_progressive_text(
+    previous_text: String,
+    replacement_text: String,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    let Some(edit) = progressive_replacement_edit(&previous_text, &replacement_text) else {
+        return Ok(());
+    };
+
+    info!(
+        "Progressive replacement edit: previous_chars={}, replacement_chars={}, kept_prefix_chars={}, backspaces={}, insertion_chars={}",
+        previous_text.chars().count(),
+        replacement_text.chars().count(),
+        edit.kept_prefix_chars,
+        edit.backspaces,
+        edit.insertion.chars().count()
+    );
+
+    let enigo_state = app_handle
+        .try_state::<EnigoState>()
+        .ok_or("Enigo state not initialized")?;
+    let mut enigo = enigo_state
+        .0
+        .lock()
+        .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
+
+    for _ in 0..edit.backspaces {
+        enigo
+            .key(Key::Backspace, Direction::Click)
+            .map_err(|e| format!("Failed to remove interim progressive text: {}", e))?;
+    }
+    drop(enigo);
+
+    if edit.insertion.trim().is_empty() {
+        Ok(())
+    } else {
+        insert_progressive_text(edit.insertion, app_handle)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,5 +808,18 @@ mod tests {
         assert!(should_send_auto_submit(true, PasteMethod::Direct));
         assert!(should_send_auto_submit(true, PasteMethod::CtrlShiftV));
         assert!(should_send_auto_submit(true, PasteMethod::ShiftInsert));
+    }
+
+    #[test]
+    fn progressive_replacement_edit_keeps_shared_prefix() {
+        let edit = progressive_replacement_edit(
+            "The progressive mode was treating two seconds.",
+            "The progressive mode was treating two-second chunk transcripts as final text.",
+        )
+        .expect("text changed");
+
+        assert_eq!(edit.kept_prefix_chars, 37);
+        assert_eq!(edit.backspaces, 9);
+        assert_eq!(edit.insertion, "-second chunk transcripts as final text.");
     }
 }

@@ -213,6 +213,32 @@
       "pushToTalk": {
         "label": "Stisk a mluv",
         "description": "Podržte pro nahrávání, uvolněte pro zastavení"
+      },
+      "dictationStability": {
+        "title": "Dictation Stability",
+        "description": "Choose how aggressively Handy types live text while you dictate.",
+        "options": {
+          "stableLive": "Stable Live",
+          "fastLive": "Fast Live",
+          "finalOnly": "Final Only"
+        }
+      },
+      "voiceFinish": {
+        "label": "Voice Finish Trigger",
+        "description": "Stop dictation by saying a configured phrase near the end of your speech.",
+        "add": "Add",
+        "remove": "Remove {{phrase}}",
+        "duplicate": "\"{{phrase}}\" already exists",
+        "phrases": {
+          "title": "Finish Phrases",
+          "description": "Phrases that stop dictation when they appear at the end of the transcript.",
+          "placeholder": "finish dictation"
+        },
+        "variants": {
+          "title": "Heard Variants",
+          "description": "Optional calibration phrases for how the model actually hears your trigger.",
+          "placeholder": "finish the dictation"
+        }
       }
     },
     "sound": {
@@ -356,6 +382,11 @@
         "add": "Přidat",
         "remove": "Odebrat {{word}}",
         "duplicate": "\"{{word}}\" již existuje"
+      },
+      "gameModeAutoUnload": {},
+      "gameMode": {
+        "label": "Auto-unload during games",
+        "description": "Automatically unload the model to free GPU memory while a fullscreen game is running. It reloads on your next dictation."
       }
     },
     "postProcessing": {
@@ -620,6 +651,7 @@
   },
   "overlay": {
     "transcribing": "Přepisuji...",
-    "processing": "Zpracovávám..."
+    "processing": "Zpracovávám...",
+    "live": "live"
   }
 }

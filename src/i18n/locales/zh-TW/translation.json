@@ -195,6 +195,32 @@
       "pushToTalk": {
         "label": "按住說話",
         "description": "按住錄製，放開停止"
+      },
+      "dictationStability": {
+        "title": "Dictation Stability",
+        "description": "Choose how aggressively Handy types live text while you dictate.",
+        "options": {
+          "stableLive": "Stable Live",
+          "fastLive": "Fast Live",
+          "finalOnly": "Final Only"
+        }
+      },
+      "voiceFinish": {
+        "label": "Voice Finish Trigger",
+        "description": "Stop dictation by saying a configured phrase near the end of your speech.",
+        "add": "Add",
+        "remove": "Remove {{phrase}}",
+        "duplicate": "\"{{phrase}}\" already exists",
+        "phrases": {
+          "title": "Finish Phrases",
+          "description": "Phrases that stop dictation when they appear at the end of the transcript.",
+          "placeholder": "finish dictation"
+        },
+        "variants": {
+          "title": "Heard Variants",
+          "description": "Optional calibration phrases for how the model actually hears your trigger.",
+          "placeholder": "finish the dictation"
+        }
       }
     },
     "models": {
@@ -356,6 +382,11 @@
         "add": "新增",
         "remove": "刪除 {{word}}",
         "duplicate": "「{{word}}」已存在"
+      },
+      "gameModeAutoUnload": {},
+      "gameMode": {
+        "label": "Auto-unload during games",
+        "description": "Automatically unload the model to free GPU memory while a fullscreen game is running. It reloads on your next dictation."
       }
     },
     "postProcessing": {
@@ -620,6 +651,7 @@
   },
   "overlay": {
     "transcribing": "正在轉錄...",
-    "processing": "處理中..."
+    "processing": "處理中...",
+    "live": "live"
   }
 }

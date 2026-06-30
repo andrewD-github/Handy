@@ -482,6 +482,33 @@ impl AudioRecordingManager {
             _ => None,
         }
     }
+
+    pub fn drain_recording_chunk(&self, binding_id: &str) -> Option<Vec<f32>> {
+        let state = self.state.lock().unwrap();
+
+        match *state {
+            RecordingState::Recording {
+                binding_id: ref active,
+            } if active == binding_id => {
+                drop(state);
+
+                if let Some(rec) = self.recorder.lock().unwrap().as_ref() {
+                    match rec.drain() {
+                        Ok(buf) => Some(buf),
+                        Err(e) => {
+                            error!("drain() failed: {e}");
+                            Some(Vec::new())
+                        }
+                    }
+                } else {
+                    error!("Recorder not available");
+                    Some(Vec::new())
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn is_recording(&self) -> bool {
         matches!(
             *self.state.lock().unwrap(),

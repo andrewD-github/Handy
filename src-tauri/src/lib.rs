@@ -6,6 +6,8 @@ pub mod audio_toolkit;
 pub mod cli;
 mod clipboard;
 mod commands;
+mod diagnostics;
+mod game_mode;
 mod helpers;
 mod input;
 mod llm_client;
@@ -494,6 +496,11 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_binding,
             shortcut::reset_binding,
             shortcut::change_ptt_setting,
+            shortcut::change_dictation_stability_mode_setting,
+            shortcut::change_voice_finish_trigger_enabled_setting,
+            shortcut::update_voice_finish_phrases,
+            shortcut::update_voice_finish_phrase_variants,
+            shortcut::change_game_mode_auto_unload_setting,
             shortcut::change_audio_feedback_setting,
             shortcut::change_audio_feedback_volume_setting,
             shortcut::change_sound_theme_setting,

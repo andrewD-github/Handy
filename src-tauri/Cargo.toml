@@ -113,6 +113,7 @@ tauri-runtime-wry = { git = "https://github.com/cjpais/tauri.git", branch = "han
 tauri-utils = { git = "https://github.com/cjpais/tauri.git", branch = "handy-2.10.2" }
 
 [dev-dependencies]
+filetime = "0.2"
 tempfile = "3"
 
 [profile.release]

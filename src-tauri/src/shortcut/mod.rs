@@ -22,9 +22,9 @@ use tauri_plugin_autostart::ManagerExt;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::settings::APPLE_INTELLIGENCE_DEFAULT_MODEL_ID;
 use crate::settings::{
-    self, get_settings, AutoSubmitKey, ClipboardHandling, KeyboardImplementation, LLMPrompt,
-    OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TypingTool,
-    APPLE_INTELLIGENCE_PROVIDER_ID,
+    self, get_settings, AutoSubmitKey, ClipboardHandling, DictationStabilityMode,
+    KeyboardImplementation, LLMPrompt, OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme,
+    TypingTool, APPLE_INTELLIGENCE_PROVIDER_ID,
 };
 use crate::tray;
 
@@ -476,6 +476,69 @@ fn initialize_handy_keys_with_rollback(app: &AppHandle) -> Result<bool, String> 
 pub fn change_ptt_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.push_to_talk = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_dictation_stability_mode_setting(app: AppHandle, mode: String) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    let parsed = match mode.as_str() {
+        "fast_live" => DictationStabilityMode::FastLive,
+        "stable_live" => DictationStabilityMode::StableLive,
+        "final_only" => DictationStabilityMode::FinalOnly,
+        other => {
+            warn!(
+                "Invalid dictation stability mode '{}', defaulting to stable_live",
+                other
+            );
+            DictationStabilityMode::StableLive
+        }
+    };
+    settings.dictation_stability_mode = parsed;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_voice_finish_trigger_enabled_setting(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.voice_finish_trigger_enabled = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn update_voice_finish_phrases(app: AppHandle, phrases: Vec<String>) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.voice_finish_phrases = phrases;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn update_voice_finish_phrase_variants(
+    app: AppHandle,
+    variants: Vec<String>,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.voice_finish_phrase_variants = variants;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_game_mode_auto_unload_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.game_mode_auto_unload = enabled;
     settings::write_settings(&app, settings);
     Ok(())
 }
