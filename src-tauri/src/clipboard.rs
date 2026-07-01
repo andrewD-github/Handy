@@ -19,6 +19,25 @@ struct ProgressiveReplacementEdit {
     insertion: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ProgressiveInsertMethod {
+    Direct,
+    Clipboard(PasteMethod),
+    ExternalScript,
+    None,
+}
+
+fn progressive_insert_method(paste_method: PasteMethod) -> ProgressiveInsertMethod {
+    match paste_method {
+        PasteMethod::Direct => ProgressiveInsertMethod::Direct,
+        PasteMethod::CtrlV | PasteMethod::CtrlShiftV | PasteMethod::ShiftInsert => {
+            ProgressiveInsertMethod::Clipboard(paste_method)
+        }
+        PasteMethod::ExternalScript => ProgressiveInsertMethod::ExternalScript,
+        PasteMethod::None => ProgressiveInsertMethod::None,
+    }
+}
+
 fn common_prefix_boundary(left: &str, right: &str) -> (usize, usize) {
     let mut prefix_bytes = 0;
     let mut prefix_chars = 0;
@@ -720,29 +739,48 @@ pub fn insert_progressive_text(text: String, app_handle: AppHandle) -> Result<()
         .lock()
         .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
 
-    match paste_direct(
-        &mut enigo,
-        &text,
-        #[cfg(target_os = "linux")]
-        settings.typing_tool,
-    ) {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            warn!(
-                "Direct progressive text insertion failed: {}. Falling back to clipboard paste.",
-                err
-            );
-            let fallback_method = match settings.paste_method {
-                PasteMethod::CtrlShiftV | PasteMethod::ShiftInsert => settings.paste_method,
-                _ => PasteMethod::CtrlV,
-            };
-            paste_via_clipboard(
+    match progressive_insert_method(settings.paste_method) {
+        ProgressiveInsertMethod::None => {
+            info!("PasteMethod::None selected - skipping progressive insert");
+            Ok(())
+        }
+        ProgressiveInsertMethod::Direct => {
+            match paste_direct(
                 &mut enigo,
                 &text,
-                &app_handle,
-                &fallback_method,
-                settings.paste_delay_ms,
-            )
+                #[cfg(target_os = "linux")]
+                settings.typing_tool,
+            ) {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    warn!(
+                        "Direct progressive text insertion failed: {}. Falling back to clipboard paste.",
+                        err
+                    );
+                    paste_via_clipboard(
+                        &mut enigo,
+                        &text,
+                        &app_handle,
+                        &PasteMethod::CtrlV,
+                        settings.paste_delay_ms,
+                    )
+                }
+            }
+        }
+        ProgressiveInsertMethod::Clipboard(method) => paste_via_clipboard(
+            &mut enigo,
+            &text,
+            &app_handle,
+            &method,
+            settings.paste_delay_ms,
+        ),
+        ProgressiveInsertMethod::ExternalScript => {
+            let script_path = settings
+                .external_script_path
+                .as_ref()
+                .filter(|p| !p.is_empty())
+                .ok_or("External script path is not configured")?;
+            paste_via_external_script(&text, script_path)
         }
     }
 }
@@ -808,6 +846,38 @@ mod tests {
         assert!(should_send_auto_submit(true, PasteMethod::Direct));
         assert!(should_send_auto_submit(true, PasteMethod::CtrlShiftV));
         assert!(should_send_auto_submit(true, PasteMethod::ShiftInsert));
+    }
+
+    #[test]
+    fn progressive_insert_respects_clipboard_paste_methods() {
+        assert_eq!(
+            progressive_insert_method(PasteMethod::CtrlV),
+            ProgressiveInsertMethod::Clipboard(PasteMethod::CtrlV)
+        );
+        assert_eq!(
+            progressive_insert_method(PasteMethod::CtrlShiftV),
+            ProgressiveInsertMethod::Clipboard(PasteMethod::CtrlShiftV)
+        );
+        assert_eq!(
+            progressive_insert_method(PasteMethod::ShiftInsert),
+            ProgressiveInsertMethod::Clipboard(PasteMethod::ShiftInsert)
+        );
+    }
+
+    #[test]
+    fn progressive_insert_preserves_non_clipboard_paste_methods() {
+        assert_eq!(
+            progressive_insert_method(PasteMethod::Direct),
+            ProgressiveInsertMethod::Direct
+        );
+        assert_eq!(
+            progressive_insert_method(PasteMethod::ExternalScript),
+            ProgressiveInsertMethod::ExternalScript
+        );
+        assert_eq!(
+            progressive_insert_method(PasteMethod::None),
+            ProgressiveInsertMethod::None
+        );
     }
 
     #[test]
