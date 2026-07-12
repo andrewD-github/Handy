@@ -1,4 +1,5 @@
 use crate::input::{self, EnigoState};
+use crate::input::{ensure_target_window, foreground_window_id};
 #[cfg(target_os = "linux")]
 use crate::settings::TypingTool;
 use crate::settings::{get_settings, AutoSubmitKey, ClipboardHandling, PasteMethod};
@@ -8,6 +9,11 @@ use std::process::Command;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_BACK,
+};
 
 #[cfg(target_os = "linux")]
 use crate::utils::{is_kde_wayland, is_wayland};
@@ -73,6 +79,55 @@ fn progressive_replacement_edit(
         backspaces: previous_suffix.chars().count(),
         insertion: replacement_suffix.to_string(),
     })
+}
+
+#[cfg(target_os = "windows")]
+fn windows_backspace_inputs(backspaces: usize) -> Vec<INPUT> {
+    let mut inputs = Vec::with_capacity(backspaces.saturating_mul(2));
+    for _ in 0..backspaces {
+        inputs.push(INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_BACK,
+                    ..Default::default()
+                },
+            },
+        });
+        inputs.push(INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_BACK,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    ..Default::default()
+                },
+            },
+        });
+    }
+    inputs
+}
+
+#[cfg(all(target_os = "windows", test))]
+fn is_key_up(input: &INPUT) -> bool {
+    unsafe { input.Anonymous.ki.dwFlags.contains(KEYEVENTF_KEYUP) }
+}
+
+#[cfg(target_os = "windows")]
+fn send_backspaces_batch(backspaces: usize) -> Result<(), String> {
+    if backspaces == 0 {
+        return Ok(());
+    }
+    let inputs = windows_backspace_inputs(backspaces);
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    if sent as usize == inputs.len() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Failed to send progressive backspace batch: sent {sent} of {} inputs",
+            inputs.len()
+        ))
+    }
 }
 
 /// Pastes text using the clipboard: saves current content, writes text, sends paste keystroke, restores clipboard.
@@ -789,6 +844,7 @@ pub fn replace_progressive_text(
     previous_text: String,
     replacement_text: String,
     app_handle: AppHandle,
+    expected_target_window_id: Option<isize>,
 ) -> Result<(), String> {
     let Some(edit) = progressive_replacement_edit(&previous_text, &replacement_text) else {
         return Ok(());
@@ -803,24 +859,36 @@ pub fn replace_progressive_text(
         edit.insertion.chars().count()
     );
 
+    #[cfg(not(target_os = "windows"))]
     let enigo_state = app_handle
         .try_state::<EnigoState>()
         .ok_or("Enigo state not initialized")?;
+    #[cfg(not(target_os = "windows"))]
     let mut enigo = enigo_state
         .0
         .lock()
         .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
 
+    #[cfg(target_os = "windows")]
+    {
+        ensure_target_window(expected_target_window_id, foreground_window_id())?;
+        send_backspaces_batch(edit.backspaces)?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
     for _ in 0..edit.backspaces {
         enigo
             .key(Key::Backspace, Direction::Click)
             .map_err(|e| format!("Failed to remove interim progressive text: {}", e))?;
     }
+    #[cfg(not(target_os = "windows"))]
     drop(enigo);
 
     if edit.insertion.trim().is_empty() {
         Ok(())
     } else {
+        #[cfg(target_os = "windows")]
+        ensure_target_window(expected_target_window_id, foreground_window_id())?;
         insert_progressive_text(edit.insertion, app_handle)
     }
 }
@@ -828,6 +896,15 @@ pub fn replace_progressive_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_backspace_batch_contains_press_and_release_per_character() {
+        let inputs = windows_backspace_inputs(3);
+
+        assert_eq!(inputs.len(), 6);
+        assert_eq!(inputs.iter().filter(|input| is_key_up(input)).count(), 3);
+    }
 
     #[test]
     fn auto_submit_requires_setting_enabled() {

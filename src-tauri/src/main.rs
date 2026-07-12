@@ -1,5 +1,8 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), not(feature = "headless-console")),
+    windows_subsystem = "windows"
+)]
 
 use clap::Parser;
 use handy_app_lib::CliArgs;

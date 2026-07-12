@@ -55,4 +55,29 @@ pub struct CliArgs {
     /// Emit --transcribe-file results as JSON.
     #[arg(long)]
     pub json: bool,
+
+    /// Override the ONNX Runtime accelerator for this headless process only.
+    /// DirectML must be selected explicitly; transcribe-rs intentionally keeps
+    /// it out of auto mode because it requires sequential ORT sessions.
+    #[arg(long, value_parser = ["auto", "cpu", "directml"])]
+    pub ort_accelerator: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_headless_ort_accelerator_override() {
+        let args = CliArgs::try_parse_from([
+            "handy",
+            "--transcribe-file",
+            "sample.wav",
+            "--ort-accelerator",
+            "directml",
+        ])
+        .unwrap();
+
+        assert_eq!(args.ort_accelerator.as_deref(), Some("directml"));
+    }
 }

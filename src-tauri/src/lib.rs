@@ -331,6 +331,17 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
     use managers::model::EngineType;
     use std::time::Instant;
 
+    if let Some(value) = &args.ort_accelerator {
+        let accelerator = match value.parse::<transcribe_rs::accel::OrtAccelerator>() {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("error: invalid ORT accelerator '{}': {}", value, error);
+                return 2;
+            }
+        };
+        transcribe_rs::accel::set_ort_accelerator(accelerator);
+    }
+
     // --list-devices: print the selectable whisper compute devices (index 0 is
     // CPU; 1.. are GPUs) and exit. Pass an index here to --device-index.
     if args.list_devices {
@@ -424,8 +435,9 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
     let bound_backend = if is_whisper {
         managers::transcription::describe_effective_whisper_device(device_index)
     } else {
-        "onnx".to_string()
+        "onnx (effective provider unverified)".to_string()
     };
+    let requested_ort_accelerator = transcribe_rs::accel::get_ort_accelerator().to_string();
 
     let runs = args.repeat.unwrap_or(1).max(1);
     let mut times_ms: Vec<u64> = Vec::new();
@@ -463,6 +475,7 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
             serde_json::json!({
                 "model": model_id,
                 "requested_device": requested_device,
+                "requested_ort_accelerator": requested_ort_accelerator,
                 "bound_backend": bound_backend,
                 "audio_secs": audio_secs,
                 "load_ms": load_ms,

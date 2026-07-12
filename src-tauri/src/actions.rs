@@ -3,6 +3,9 @@ use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
 use crate::audio_toolkit::{is_microphone_access_denied, is_no_input_device_error};
 use crate::diagnostics::DiagnosticSession;
+#[cfg(target_os = "windows")]
+use crate::input::ensure_target_window;
+use crate::input::{foreground_window_id, target_window_matches};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
 use crate::managers::transcription::TranscriptionManager;
@@ -21,7 +24,7 @@ use once_cell::sync::Lazy;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Manager;
@@ -45,10 +48,90 @@ impl Drop for FinishGuard {
 }
 
 const PROGRESSIVE_CHUNK_INTERVAL: Duration = Duration::from_secs(2);
+const PROGRESSIVE_VISIBLE_UPDATE_INTERVAL_MS: u64 = 3_200;
+const PROGRESSIVE_EMPTY_AUDIO_WATCHDOG_MS: u64 = 5 * 60 * 1_000;
 const PROGRESSIVE_MIN_SAMPLES: usize = 16_000;
 const PROGRESSIVE_INTERIM_CHURN_GUARD_MIN_CHARS: usize = 80;
 const PROGRESSIVE_INTERIM_CHURN_GUARD_MAX_BACKSPACES: usize = 60;
 const PROGRESSIVE_INTERIM_CHURN_GUARD_MIN_PREFIX: usize = 40;
+
+struct ProgressiveDisplayGate<T> {
+    latest_generation_seen: u64,
+    last_applied_elapsed_ms: Option<u64>,
+    pending: Option<(u64, T)>,
+    stopped: bool,
+}
+
+impl<T> Default for ProgressiveDisplayGate<T> {
+    fn default() -> Self {
+        Self {
+            latest_generation_seen: 0,
+            last_applied_elapsed_ms: None,
+            pending: None,
+            stopped: false,
+        }
+    }
+}
+
+impl<T> ProgressiveDisplayGate<T> {
+    fn offer(&mut self, generation: u64, elapsed_ms: u64, value: T) -> Option<(u64, T)> {
+        if self.stopped || generation <= self.latest_generation_seen {
+            return None;
+        }
+
+        self.latest_generation_seen = generation;
+        self.pending = Some((generation, value));
+        self.poll(elapsed_ms)
+    }
+
+    fn poll(&mut self, elapsed_ms: u64) -> Option<(u64, T)> {
+        if self.stopped || self.pending.is_none() {
+            return None;
+        }
+
+        let due = self.last_applied_elapsed_ms.is_none_or(|last| {
+            elapsed_ms.saturating_sub(last) >= PROGRESSIVE_VISIBLE_UPDATE_INTERVAL_MS
+        });
+        if !due {
+            return None;
+        }
+
+        self.last_applied_elapsed_ms = Some(elapsed_ms);
+        self.pending.take()
+    }
+
+    fn stop(&mut self) {
+        self.stopped = true;
+        self.pending = None;
+    }
+}
+
+#[derive(Default)]
+struct ProgressiveLeakWatchdog {
+    last_audio_elapsed_ms: Option<u64>,
+    fired: bool,
+}
+
+impl ProgressiveLeakWatchdog {
+    fn observe(&mut self, elapsed_ms: u64, sample_count: usize) -> bool {
+        if sample_count > 0 {
+            self.last_audio_elapsed_ms = Some(elapsed_ms);
+            self.fired = false;
+            return false;
+        }
+
+        if self.fired {
+            return false;
+        }
+        let last_audio_elapsed_ms = self.last_audio_elapsed_ms.unwrap_or(0);
+        if elapsed_ms.saturating_sub(last_audio_elapsed_ms) < PROGRESSIVE_EMPTY_AUDIO_WATCHDOG_MS {
+            return false;
+        }
+
+        self.fired = true;
+        true
+    }
+}
 
 struct ProgressiveSession {
     committed_text: Mutex<String>,
@@ -59,10 +142,15 @@ struct ProgressiveSession {
     in_flight: Mutex<bool>,
     idle: Condvar,
     stopping: AtomicBool,
+    started_at: Instant,
+    generation: AtomicU64,
+    display_gate: Mutex<ProgressiveDisplayGate<ProgressiveInterimUpdate>>,
+    target_window_id: Option<isize>,
+    leak_watchdog: Mutex<ProgressiveLeakWatchdog>,
 }
 
 impl ProgressiveSession {
-    fn new(diagnostic: Option<DiagnosticSession>) -> Self {
+    fn new(diagnostic: Option<DiagnosticSession>, target_window_id: Option<isize>) -> Self {
         Self {
             committed_text: Mutex::new(String::new()),
             locked_prefix_chars: Mutex::new(0),
@@ -72,6 +160,11 @@ impl ProgressiveSession {
             in_flight: Mutex::new(false),
             idle: Condvar::new(),
             stopping: AtomicBool::new(false),
+            started_at: Instant::now(),
+            generation: AtomicU64::new(0),
+            display_gate: Mutex::new(ProgressiveDisplayGate::default()),
+            target_window_id,
+            leak_watchdog: Mutex::new(ProgressiveLeakWatchdog::default()),
         }
     }
 
@@ -83,8 +176,19 @@ impl ProgressiveSession {
         }
     }
 
-    fn wait_until_idle(&self) {
+    fn try_begin_inference(&self) -> bool {
         let mut in_flight = self.in_flight.lock().unwrap();
+        if self.stopping.load(Ordering::Acquire) {
+            return false;
+        }
+        *in_flight = true;
+        true
+    }
+
+    fn begin_stopping_and_wait(&self) {
+        let mut in_flight = self.in_flight.lock().unwrap();
+        self.stopping.store(true, Ordering::Release);
+        self.stop_visible_updates();
         while *in_flight {
             in_flight = self.idle.wait(in_flight).unwrap();
         }
@@ -140,6 +244,50 @@ impl ProgressiveSession {
 
     fn replace_locked_prefix_chars(&self, chars: usize) {
         *self.locked_prefix_chars.lock().unwrap() = chars;
+    }
+
+    fn next_generation(&self) -> u64 {
+        self.generation.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn offer_visible_update(
+        &self,
+        generation: u64,
+        update: ProgressiveInterimUpdate,
+    ) -> Option<(u64, ProgressiveInterimUpdate)> {
+        let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
+        self.display_gate
+            .lock()
+            .unwrap()
+            .offer(generation, elapsed_ms, update)
+    }
+
+    fn stop_visible_updates(&self) {
+        self.display_gate.lock().unwrap().stop();
+    }
+
+    fn poll_visible_update(&self) -> Option<(u64, ProgressiveInterimUpdate)> {
+        let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
+        self.display_gate.lock().unwrap().poll(elapsed_ms)
+    }
+
+    fn target_is_foreground(&self) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            target_window_matches(self.target_window_id, foreground_window_id())
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            true
+        }
+    }
+
+    fn observe_audio_for_leak(&self, sample_count: usize) -> bool {
+        self.leak_watchdog
+            .lock()
+            .unwrap()
+            .observe(self.started_at.elapsed().as_millis() as u64, sample_count)
     }
 }
 
@@ -567,7 +715,7 @@ fn progressive_edit_stats(previous: &str, replacement: &str) -> (usize, usize, u
     (shared_prefix_chars, backspace_chars, insertion_chars)
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct ProgressiveInterimUpdate {
     text: String,
     locked_prefix_chars: usize,
@@ -852,12 +1000,24 @@ fn replace_progressive_on_main(
     app: &AppHandle,
     previous_text: String,
     replacement_text: String,
+    expected_target_window_id: Option<isize>,
 ) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let app_for_closure = app.clone();
     app.run_on_main_thread(move || {
-        let result =
-            utils::replace_progressive_text(previous_text, replacement_text, app_for_closure);
+        #[cfg(target_os = "windows")]
+        let focus_result = ensure_target_window(expected_target_window_id, foreground_window_id());
+        #[cfg(not(target_os = "windows"))]
+        let focus_result: Result<(), String> = Ok(());
+
+        let result = focus_result.and_then(|_| {
+            utils::replace_progressive_text(
+                previous_text,
+                replacement_text,
+                app_for_closure,
+                expected_target_window_id,
+            )
+        });
         let _ = tx.send(result);
     })
     .map_err(|e| format!("Failed to schedule progressive replacement: {e:?}"))?;
@@ -873,7 +1033,8 @@ fn start_progressive_transcription_loop(
     transcription_manager: Arc<TranscriptionManager>,
     diagnostic: Option<DiagnosticSession>,
 ) {
-    let session = Arc::new(ProgressiveSession::new(diagnostic));
+    let target_window_id = foreground_window_id();
+    let session = Arc::new(ProgressiveSession::new(diagnostic, target_window_id));
     PROGRESSIVE_SESSIONS
         .lock()
         .unwrap()
@@ -886,9 +1047,14 @@ fn start_progressive_transcription_loop(
             break;
         }
 
-        session.set_in_flight(true);
+        if !session.try_begin_inference() {
+            break;
+        }
+        let generation = session.next_generation();
         let result = (|| {
-            if let Some(samples) = recording_manager.drain_recording_chunk(&binding_id) {
+            let drained_samples = recording_manager.drain_recording_chunk(&binding_id);
+            let drained_sample_count = drained_samples.as_ref().map_or(0, Vec::len);
+            if let Some(samples) = drained_samples {
                 session.push_audio(&samples);
                 if let Some(diagnostic) = session.diagnostic() {
                     diagnostic.record_json(
@@ -899,6 +1065,26 @@ fn start_progressive_transcription_loop(
                         }),
                     );
                 }
+            }
+
+            if session.observe_audio_for_leak(drained_sample_count) {
+                warn!(
+                    "Progressive session watchdog observed five minutes without retained audio; requesting stop"
+                );
+                if let Some(diagnostic) = session.diagnostic() {
+                    diagnostic.record_json(
+                        "progressive_leak_watchdog",
+                        json!({
+                            "status": "stop_requested",
+                            "empty_audio_ms": PROGRESSIVE_EMPTY_AUDIO_WATCHDOG_MS,
+                            "generation": generation,
+                        }),
+                    );
+                }
+                if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {
+                    coordinator.send_input(&binding_id, "progressive_leak_watchdog", true, false);
+                }
+                return Ok(());
             }
 
             if session.stopping.load(Ordering::Relaxed) {
@@ -918,6 +1104,19 @@ fn start_progressive_transcription_loop(
             match transcription_manager.transcribe_chunk(audio_so_far) {
                 Ok(text) => {
                     let transcription_elapsed = transcription_start.elapsed();
+                    if session.stopping.load(Ordering::Acquire) {
+                        if let Some(diagnostic) = session.diagnostic() {
+                            diagnostic.record_json(
+                                "progressive_result_discarded",
+                                json!({
+                                    "generation": generation,
+                                    "reason": "stop_requested",
+                                    "audio_samples": session.audio_sample_count(),
+                                }),
+                            );
+                        }
+                        return Ok(());
+                    }
                     debug!(
                         "Progressive interim transcription completed in {:?}: text_chars={}",
                         transcription_elapsed,
@@ -928,6 +1127,7 @@ fn start_progressive_transcription_loop(
                             "progressive_interim_transcript",
                             json!({
                                 "elapsed_ms": transcription_elapsed.as_millis(),
+                                "generation": generation,
                                 "audio_samples": session.audio_sample_count(),
                                 "text_chars": text.chars().count(),
                                 "text": text.as_str(),
@@ -963,7 +1163,7 @@ fn start_progressive_transcription_loop(
                     }
                     let live_enabled =
                         live_progressive_enabled_for_mode(settings.dictation_stability_mode);
-                    let update = if live_enabled {
+                    let accepted_update = if live_enabled {
                         match settings.dictation_stability_mode {
                             DictationStabilityMode::FastLive => {
                                 interim_progressive_replacement(&committed, candidate_text).map(
@@ -983,6 +1183,55 @@ fn start_progressive_transcription_loop(
                     } else {
                         None
                     };
+                    let accepted_by_stability = accepted_update.is_some();
+                    let update = match accepted_update {
+                        Some(accepted) => session.offer_visible_update(generation, accepted),
+                        None => session.poll_visible_update(),
+                    }
+                    .map(|(_, update)| update);
+
+                    if update.is_some() && !session.target_is_foreground() {
+                        warn!(
+                            "Skipping progressive target edit because the original target window is not foreground"
+                        );
+                        if let Some(diagnostic) = session.diagnostic() {
+                            diagnostic.record_json(
+                                "progressive_focus_guard",
+                                json!({
+                                    "generation": generation,
+                                    "status": "skipped",
+                                    "reason": "target_window_changed",
+                                    "expected_window": session.target_window_id,
+                                    "current_window": foreground_window_id(),
+                                }),
+                            );
+                        }
+                        emit_progressive_overlay_diagnostics(
+                            &app,
+                            progressive_overlay_diagnostics(
+                                "focus",
+                                &committed,
+                                None,
+                                locked_prefix_chars,
+                                transcription_elapsed,
+                            ),
+                        );
+                        if let Some(matched) = voice_finish.as_ref() {
+                            info!(
+                                "Voice finish trigger matched '{}' while focus guard blocked editing; requesting transcription stop",
+                                matched.matched_phrase
+                            );
+                            if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {
+                                coordinator.send_input(
+                                    &binding_id,
+                                    "voice_finish_trigger",
+                                    true,
+                                    false,
+                                );
+                            }
+                        }
+                        return Ok(());
+                    }
 
                     if let Some(update) = update {
                         debug!(
@@ -995,6 +1244,7 @@ fn start_progressive_transcription_loop(
                             &app,
                             committed.clone(),
                             update.text.clone(),
+                            session.target_window_id,
                         ) {
                             error!("Failed to replace progressive text: {}", e);
                             if let Some(diagnostic) = session.diagnostic() {
@@ -1037,6 +1287,19 @@ fn start_progressive_transcription_loop(
                             session.replace_committed_text(update.text);
                             session.replace_locked_prefix_chars(update.locked_prefix_chars);
                             emit_progressive_overlay_diagnostics(&app, diagnostics);
+                        }
+                    } else if accepted_by_stability {
+                        debug!("Accepted progressive hypothesis coalesced by display cadence");
+                        if let Some(diagnostic) = session.diagnostic() {
+                            diagnostic.record_json(
+                                "progressive_coalesced",
+                                json!({
+                                    "generation": generation,
+                                    "reason": "visible_update_throttle",
+                                    "visible_interval_ms": PROGRESSIVE_VISIBLE_UPDATE_INTERVAL_MS,
+                                    "candidate_text": candidate_text,
+                                }),
+                            );
                         }
                     } else {
                         debug!("Progressive interim replacement had no stable edit to apply");
@@ -1319,8 +1582,26 @@ impl ShortcutAction for TranscribeAction {
             {
                 let session = PROGRESSIVE_SESSIONS.lock().unwrap().remove(&binding_id);
                 if let Some(session) = &session {
-                    session.stopping.store(true, Ordering::Relaxed);
-                    session.wait_until_idle();
+                    let interim_wait_started = Instant::now();
+                    if let Some(diagnostic) = session.diagnostic() {
+                        diagnostic.record_json(
+                            "progressive_stop_requested",
+                            json!({
+                                "generation": session.generation.load(Ordering::Acquire),
+                                "in_flight": *session.in_flight.lock().unwrap(),
+                                "audio_samples": session.audio_sample_count(),
+                            }),
+                        );
+                    }
+                    session.begin_stopping_and_wait();
+                    if let Some(diagnostic) = session.diagnostic() {
+                        diagnostic.record_json(
+                            "progressive_stop_interim_wait",
+                            json!({
+                                "elapsed_ms": interim_wait_started.elapsed().as_millis(),
+                            }),
+                        );
+                    }
                 }
 
                 let stop_recording_time = Instant::now();
@@ -1427,10 +1708,28 @@ impl ShortcutAction for TranscribeAction {
                                                 }),
                                             );
                                         }
-                                        if let Err(e) = replace_progressive_on_main(
+                                        if !session.target_is_foreground() {
+                                            warn!(
+                                                "Skipping final progressive reconciliation because the original target window is not foreground"
+                                            );
+                                            if let Some(diagnostic) =
+                                                progressive_diagnostic.as_ref()
+                                            {
+                                                diagnostic.record_json(
+                                                    "final_reconciliation_focus_guard",
+                                                    json!({
+                                                        "status": "skipped",
+                                                        "reason": "target_window_changed",
+                                                        "expected_window": session.target_window_id,
+                                                        "current_window": foreground_window_id(),
+                                                    }),
+                                                );
+                                            }
+                                        } else if let Err(e) = replace_progressive_on_main(
                                             &ah,
                                             committed.clone(),
                                             replacement.clone(),
+                                            session.target_window_id,
                                         ) {
                                             error!(
                                                 "Failed to replace interim progressive text: {}",
@@ -1995,7 +2294,8 @@ mod progressive_tests {
     use super::{
         char_to_byte_index, cleanup_final_text_for_paste, detect_voice_finish_trigger,
         final_progressive_replacement, interim_progressive_replacement, interim_progressive_update,
-        live_progressive_enabled_for_mode,
+        live_progressive_enabled_for_mode, ProgressiveDisplayGate, ProgressiveLeakWatchdog,
+        ProgressiveSession,
     };
     use crate::settings::{get_default_settings, DictationStabilityMode};
 
@@ -2067,6 +2367,88 @@ mod progressive_tests {
             interim_progressive_update(committed, update, locked_prefix_chars),
             None
         );
+    }
+
+    #[test]
+    fn display_gate_applies_first_accepted_hypothesis_immediately() {
+        let mut gate = ProgressiveDisplayGate::default();
+
+        assert_eq!(
+            gate.offer(1, 4_100, "first accepted".to_string()),
+            Some((1, "first accepted".to_string()))
+        );
+    }
+
+    #[test]
+    fn display_gate_coalesces_only_to_latest_accepted_hypothesis() {
+        let mut gate = ProgressiveDisplayGate::default();
+        let _ = gate.offer(1, 4_100, "first".to_string());
+
+        assert_eq!(gate.offer(2, 5_000, "second".to_string()), None);
+        assert_eq!(gate.offer(3, 6_000, "third".to_string()), None);
+        assert_eq!(gate.poll(7_300), Some((3, "third".to_string())));
+    }
+
+    #[test]
+    fn display_gate_rejects_stale_generations() {
+        let mut gate = ProgressiveDisplayGate::default();
+        let _ = gate.offer(4, 4_100, "current".to_string());
+
+        assert_eq!(gate.offer(3, 8_000, "stale".to_string()), None);
+        assert_eq!(gate.poll(8_000), None);
+    }
+
+    #[test]
+    fn stopping_display_gate_discards_pending_hypothesis() {
+        let mut gate = ProgressiveDisplayGate::default();
+        let _ = gate.offer(1, 4_100, "first".to_string());
+        let _ = gate.offer(2, 5_000, "pending".to_string());
+
+        gate.stop();
+
+        assert_eq!(gate.poll(8_000), None);
+        assert_eq!(gate.offer(3, 8_000, "late".to_string()), None);
+    }
+
+    #[test]
+    fn leak_watchdog_requests_stop_after_five_minutes_without_audio() {
+        let mut watchdog = ProgressiveLeakWatchdog::default();
+        assert!(!watchdog.observe(1_000, 16_000));
+        assert!(!watchdog.observe(300_999, 0));
+        assert!(watchdog.observe(301_000, 0));
+    }
+
+    #[test]
+    fn leak_watchdog_resets_when_audio_resumes() {
+        let mut watchdog = ProgressiveLeakWatchdog::default();
+        let _ = watchdog.observe(1_000, 16_000);
+        let _ = watchdog.observe(250_000, 0);
+        assert!(!watchdog.observe(250_100, 8_000));
+        assert!(!watchdog.observe(500_000, 0));
+    }
+
+    #[test]
+    fn leak_watchdog_fires_only_once() {
+        let mut watchdog = ProgressiveLeakWatchdog::default();
+        let _ = watchdog.observe(1_000, 16_000);
+        assert!(watchdog.observe(301_000, 0));
+        assert!(!watchdog.observe(400_000, 0));
+    }
+
+    #[test]
+    fn leak_watchdog_stops_session_that_never_receives_audio() {
+        let mut watchdog = ProgressiveLeakWatchdog::default();
+        assert!(!watchdog.observe(299_999, 0));
+        assert!(watchdog.observe(300_000, 0));
+    }
+
+    #[test]
+    fn stop_handshake_prevents_new_interim_inference() {
+        let session = ProgressiveSession::new(None, Some(42));
+
+        session.begin_stopping_and_wait();
+
+        assert!(!session.try_begin_inference());
     }
 
     #[test]

@@ -2,6 +2,9 @@ use enigo::{Enigo, Key, Keyboard, Mouse, Settings};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
 /// Wrapper for Enigo to store in Tauri's managed state.
 /// Enigo is wrapped in a Mutex since it requires mutable access.
 pub struct EnigoState(pub Mutex<Enigo>);
@@ -120,4 +123,56 @@ pub fn paste_text_direct(enigo: &mut Enigo, text: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to send text directly: {}", e))?;
 
     Ok(())
+}
+
+pub fn target_window_matches(expected: Option<isize>, current: Option<isize>) -> bool {
+    matches!((expected, current), (Some(expected), Some(current)) if expected == current)
+}
+
+pub fn ensure_target_window(expected: Option<isize>, current: Option<isize>) -> Result<(), String> {
+    if target_window_matches(expected, current) {
+        Ok(())
+    } else {
+        Err("Progressive target window is no longer foreground".to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn foreground_window_id() -> Option<isize> {
+    let window = unsafe { GetForegroundWindow() };
+    (!window.0.is_null()).then_some(window.0 as isize)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn foreground_window_id() -> Option<isize> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ensure_target_window, target_window_matches};
+
+    #[test]
+    fn target_window_guard_accepts_same_foreground_window() {
+        assert!(target_window_matches(Some(42), Some(42)));
+    }
+
+    #[test]
+    fn target_window_guard_rejects_focus_change() {
+        assert!(!target_window_matches(Some(42), Some(7)));
+        assert!(!target_window_matches(Some(42), None));
+    }
+
+    #[test]
+    fn unavailable_target_capture_fails_closed() {
+        assert!(!target_window_matches(None, Some(42)));
+    }
+
+    #[test]
+    fn guarded_edit_returns_error_after_focus_change() {
+        assert_eq!(
+            ensure_target_window(Some(42), Some(7)),
+            Err("Progressive target window is no longer foreground".to_string())
+        );
+    }
 }
