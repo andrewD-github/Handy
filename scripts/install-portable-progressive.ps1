@@ -7,7 +7,7 @@ param(
     [string]$InstallRoot = 'D:\Apps\Handy',
 
     [Parameter(ParameterSetName = 'Install')]
-    [string]$ExpectedExeSha256 = 'BF40094D19602074F05F6F62856E68819CFEDE8D21B30D4A012CE6A7F5171A03',
+    [string]$ExpectedExeSha256 = '7B735FE3A74BA1CB3A586942C97E54EC31D30A1A1139DB626DDD1F5D10CBD7C8',
 
     [Parameter(ParameterSetName = 'Install')]
     [switch]$Install,
