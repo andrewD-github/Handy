@@ -18,10 +18,11 @@ The intended custom patch surface is limited to:
 - `src-tauri/src/progressive_dictation.rs`: all direct-prompt policy and session state.
 - `src-tauri/src/actions.rs`: start, stop, cancel, and fallback lifecycle calls only.
 - `src-tauri/src/managers/transcription.rs`: publish upstream committed/tentative snapshots without owning prompt policy.
-- `src-tauri/src/input.rs` and `src-tauri/src/clipboard.rs`: guarded platform target capture and a narrow serialized append operation.
+- `src-tauri/src/input.rs` and `src-tauri/src/clipboard.rs`: guarded platform target capture, click-without-mouse-move interaction epochs, and a narrow serialized append operation.
 - `src-tauri/src/settings.rs`, generated bindings, and one Advanced Settings control: select official overlay or direct-prompt output.
 - `src-tauri/src/lib.rs`: construct and inject the progressive manager.
-- Focused diagnostics and replay tooling: verify the extension against actual saved usage.
+- Focused diagnostics and replay tooling: verify the extension against actual saved usage. The `replay-console` Cargo feature only retains stdout/stderr for optimized headless measurements; normal packaged builds keep the Windows GUI subsystem.
+- `src/styles/theme.css`: the custom blue presentation is expressed through upstream theme tokens. Components consume tokens rather than owning a second palette.
 
 Audio capture, inference engines, model catalogs, stream commitment, stream finalization, history storage, paste transactions, and overlay rendering remain upstream-owned.
 
@@ -32,10 +33,13 @@ Audio capture, inference engines, model catalogs, stream commitment, stream fina
 3. Upstream streaming bridge and lifecycle.
 4. Setting and migration.
 5. Diagnostics and replay gates.
-6. Presentation-only theme patch.
+6. Submit/click residual-text guard.
+7. Presentation-only token theme patch.
 
 Each patch must remain independently testable. Future upgrades start from a new stable upstream tag and reapply this short series; they do not merge an old transcription engine into the new one.
 
 ## Rejected design
 
 The clipboard-copy target-content guard is not part of this branch. Its text-only snapshot could destroy rich clipboard formats, and its verify-then-edit sequence retained a same-window race. Any future final-reconciliation guard must have its own failing regression test and preserve upstream's rich clipboard behavior.
+
+The accepted residual-text guard does not inspect or replace clipboard content. A physical pointer button press increments an interaction epoch; a direct-prompt session only edits while its captured epoch still matches. Pointer movement is intentionally ignored. This fails closed after a submit click even when Chromium reuses the same window and focused control.
