@@ -202,7 +202,9 @@ Set-JsonProperty -Object $settings -Name 'selected_model' -Value $ModelId
 Set-JsonProperty -Object $settings -Name 'progressive_output_mode' -Value 'direct_prompt'
 Set-JsonProperty -Object $settings -Name 'onboarding_completed' -Value $true
 Set-JsonProperty -Object $settings -Name 'diagnostic_capture_enabled' -Value $true
-$settingsDocument | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
+$settingsJson = $settingsDocument | ConvertTo-Json -Depth 100
+$utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($settingsPath, $settingsJson, $utf8WithoutBom)
 
 if ((Get-Sha256 $installedExe) -ne $ExpectedExeSha256.ToUpperInvariant()) {
     throw 'Installed executable hash verification failed.'
