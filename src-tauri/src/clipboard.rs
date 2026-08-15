@@ -612,6 +612,46 @@ fn should_send_auto_submit(auto_submit: bool, paste_method: PasteMethod) -> bool
     auto_submit && paste_method != PasteMethod::None
 }
 
+/// Insert an already committed streaming suffix into the active prompt.
+///
+/// Progressive inserts deliberately bypass trailing-space, clipboard-copy, and
+/// auto-submit settings. The stream owns spacing and the user's submit action.
+pub(crate) fn insert_progressive_text(text: &str, app_handle: &AppHandle) -> Result<(), String> {
+    if text.is_empty() {
+        return Ok(());
+    }
+
+    let settings = get_settings(app_handle);
+    let enigo_state = app_handle
+        .try_state::<EnigoState>()
+        .ok_or("Enigo state not initialized")?;
+    let mut enigo = enigo_state
+        .0
+        .lock()
+        .map_err(|e| format!("Failed to lock Enigo: {e}"))?;
+
+    if let Err(direct_error) = paste_direct(
+        &mut enigo,
+        text,
+        #[cfg(target_os = "linux")]
+        settings.typing_tool,
+    ) {
+        log::warn!(
+            "Direct progressive insertion failed ({direct_error}); using clipboard fallback"
+        );
+        paste_via_clipboard(
+            &mut enigo,
+            text,
+            app_handle,
+            &PasteMethod::CtrlV,
+            settings.paste_delay_ms,
+            settings.paste_delay_after_ms,
+        )?;
+    }
+
+    Ok(())
+}
+
 pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
     let settings = get_settings(&app_handle);
     let paste_method = settings.paste_method;

@@ -2,6 +2,43 @@ use enigo::{Enigo, Key, Keyboard, Mouse, Settings};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+};
+
+#[cfg(target_os = "windows")]
+pub(crate) fn capture_target_identity() -> Option<crate::progressive_dictation::TargetIdentity> {
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.0.is_null() {
+        return None;
+    }
+
+    let thread_id = unsafe { GetWindowThreadProcessId(foreground, None) };
+    if thread_id == 0 {
+        return None;
+    }
+
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe { GetGUIThreadInfo(thread_id, &mut info) }.ok()?;
+    if info.hwndFocus.0.is_null() {
+        return None;
+    }
+
+    Some(crate::progressive_dictation::TargetIdentity::from_raw(
+        foreground.0 as isize,
+        info.hwndFocus.0 as isize,
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn capture_target_identity() -> Option<crate::progressive_dictation::TargetIdentity> {
+    None
+}
+
 /// Wrapper for Enigo to store in Tauri's managed state.
 /// Enigo is wrapped in a Mutex since it requires mutable access.
 pub struct EnigoState(pub Mutex<Enigo>);
