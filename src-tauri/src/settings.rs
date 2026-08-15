@@ -405,6 +405,10 @@ pub struct AppSettings {
     pub debug_mode: bool,
     #[serde(default = "default_log_level")]
     pub log_level: LogLevel,
+    #[serde(default = "default_diagnostic_capture_enabled")]
+    pub diagnostic_capture_enabled: bool,
+    #[serde(default = "default_diagnostic_retention_days")]
+    pub diagnostic_retention_days: u32,
     #[serde(default)]
     pub custom_words: Vec<String>,
     #[serde(default)]
@@ -489,6 +493,14 @@ pub struct AppSettings {
 
 fn default_model() -> String {
     "".to_string()
+}
+
+fn default_diagnostic_capture_enabled() -> bool {
+    false
+}
+
+fn default_diagnostic_retention_days() -> u32 {
+    7
 }
 
 const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 1;
@@ -881,6 +893,8 @@ pub fn get_default_settings() -> AppSettings {
         overlay_position: default_overlay_position(),
         debug_mode: false,
         log_level: default_log_level(),
+        diagnostic_capture_enabled: default_diagnostic_capture_enabled(),
+        diagnostic_retention_days: default_diagnostic_retention_days(),
         custom_words: Vec::new(),
         model_unload_timeout: ModelUnloadTimeout::default(),
         word_correction_threshold: default_word_correction_threshold(),

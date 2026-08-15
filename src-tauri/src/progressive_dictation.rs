@@ -273,17 +273,21 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
 }
 
 pub(crate) struct ProgressiveDictationManager {
+    app: AppHandle,
     coordinator: Mutex<ProgressiveCoordinator<RuntimePromptEditor>>,
     next_generation: AtomicU64,
     active_generation: AtomicU64,
+    diagnostic: Mutex<Option<(u64, crate::diagnostics::DiagnosticSession)>>,
 }
 
 impl ProgressiveDictationManager {
     pub(crate) fn new(app: AppHandle) -> Self {
         Self {
+            app: app.clone(),
             coordinator: Mutex::new(ProgressiveCoordinator::new(RuntimePromptEditor::new(app))),
             next_generation: AtomicU64::new(1),
             active_generation: AtomicU64::new(0),
+            diagnostic: Mutex::new(None),
         }
     }
 
@@ -296,6 +300,10 @@ impl ProgressiveDictationManager {
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
         self.coordinator.lock().unwrap().start(generation, target);
         self.active_generation.store(generation, Ordering::Release);
+        let settings = crate::settings::get_settings(&self.app);
+        *self.diagnostic.lock().unwrap() =
+            crate::diagnostics::DiagnosticSession::start(&self.app, generation, &settings)
+                .map(|session| (generation, session));
         Some(generation)
     }
 
@@ -315,6 +323,22 @@ impl ProgressiveDictationManager {
             committed.chars().count(),
             tentative.chars().count(),
         );
+        if let Some((diagnostic_generation, diagnostic)) = self.diagnostic.lock().unwrap().as_ref()
+        {
+            if *diagnostic_generation == generation {
+                let mut payload = crate::diagnostics::snapshot_metadata(
+                    generation,
+                    committed,
+                    tentative,
+                    &format!("{decision:?}"),
+                );
+                if let Some(fields) = payload.as_object_mut() {
+                    fields.insert("committed".into(), committed.into());
+                    fields.insert("tentative".into(), tentative.into());
+                }
+                diagnostic.record_json("stream_snapshot", payload);
+            }
+        }
     }
 
     pub(crate) fn finish(&self, generation: u64, final_text: &str) -> ProgressiveCompletion {
@@ -335,6 +359,29 @@ impl ProgressiveDictationManager {
             completion.owns_output,
             completion.decision,
         );
+        let diagnostic = {
+            let mut guard = self.diagnostic.lock().unwrap();
+            if guard
+                .as_ref()
+                .is_some_and(|(diagnostic_generation, _)| *diagnostic_generation == generation)
+            {
+                guard.take().map(|(_, diagnostic)| diagnostic)
+            } else {
+                None
+            }
+        };
+        if let Some(diagnostic) = diagnostic {
+            diagnostic.record_json(
+                "finalization",
+                serde_json::json!({
+                    "generation": generation,
+                    "final_text": final_text,
+                    "final_chars": final_text.chars().count(),
+                    "owns_output": completion.owns_output,
+                    "decision": format!("{:?}", completion.decision),
+                }),
+            );
+        }
         completion
     }
 
@@ -346,6 +393,23 @@ impl ProgressiveDictationManager {
             Ordering::AcqRel,
             Ordering::Acquire,
         );
+        let diagnostic = {
+            let mut guard = self.diagnostic.lock().unwrap();
+            if guard
+                .as_ref()
+                .is_some_and(|(diagnostic_generation, _)| *diagnostic_generation == generation)
+            {
+                guard.take().map(|(_, diagnostic)| diagnostic)
+            } else {
+                None
+            }
+        };
+        if let Some(diagnostic) = diagnostic {
+            diagnostic.record_json(
+                "session_cancel",
+                serde_json::json!({"generation": generation}),
+            );
+        }
     }
 }
 
