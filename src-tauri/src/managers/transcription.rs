@@ -800,9 +800,7 @@ impl TranscriptionManager {
         self.stream_active.store(false, Ordering::Release);
 
         let manager = self.clone();
-        thread::spawn(move || {
-            manager.run_stream_worker(rx, worker_id, progressive_generation)
-        });
+        thread::spawn(move || manager.run_stream_worker(rx, worker_id, progressive_generation));
     }
 
     fn run_stream_worker(

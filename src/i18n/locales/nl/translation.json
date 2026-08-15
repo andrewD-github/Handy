@@ -308,6 +308,14 @@
           }
         }
       },
+      "progressiveOutput": {
+        "title": "Live Text Destination",
+        "description": "Choose where committed live transcription appears. Direct prompt types stable text into the application where dictation began and requires a model with the Streaming badge.",
+        "options": {
+          "overlay": "Handy overlay",
+          "directPrompt": "Directly in the active prompt"
+        }
+      },
       "pasteMethod": {
         "title": "Plakmethode",
         "description": "Kies hoe tekst wordt ingevoegd. 'Direct' simuleert typen via het systeem. 'Geen' slaat het plakken over en werkt alleen de geschiedenis en het klembord bij.",

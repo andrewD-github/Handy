@@ -96,11 +96,7 @@ impl ProgressiveSession {
         ProgressiveDecision::Append(suffix.to_string())
     }
 
-    pub(crate) fn finish(
-        &mut self,
-        generation: u64,
-        final_text: &str,
-    ) -> ProgressiveDecision {
+    pub(crate) fn finish(&mut self, generation: u64, final_text: &str) -> ProgressiveDecision {
         if self.stopped {
             return ProgressiveDecision::Skip(ProgressiveSkipReason::Stopped);
         }
@@ -222,11 +218,7 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
         decision
     }
 
-    pub(crate) fn finish(
-        &mut self,
-        generation: u64,
-        final_text: &str,
-    ) -> ProgressiveCompletion {
+    pub(crate) fn finish(&mut self, generation: u64, final_text: &str) -> ProgressiveCompletion {
         let Some(session) = self.session.as_mut() else {
             return ProgressiveCompletion {
                 decision: ProgressiveDecision::Skip(ProgressiveSkipReason::Stopped),
@@ -303,8 +295,7 @@ impl ProgressiveDictationManager {
         };
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
         self.coordinator.lock().unwrap().start(generation, target);
-        self.active_generation
-            .store(generation, Ordering::Release);
+        self.active_generation.store(generation, Ordering::Release);
         Some(generation)
     }
 
@@ -314,11 +305,11 @@ impl ProgressiveDictationManager {
     }
 
     pub(crate) fn apply_snapshot(&self, generation: u64, committed: &str, tentative: &str) {
-        let decision = self.coordinator.lock().unwrap().apply_snapshot(
-            generation,
-            committed,
-            tentative,
-        );
+        let decision = self
+            .coordinator
+            .lock()
+            .unwrap()
+            .apply_snapshot(generation, committed, tentative);
         log::debug!(
             "Progressive snapshot decision: generation={generation}, committed_chars={}, tentative_chars={}, decision={decision:?}",
             committed.chars().count(),

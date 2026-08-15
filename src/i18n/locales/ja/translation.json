@@ -308,6 +308,14 @@
           }
         }
       },
+      "progressiveOutput": {
+        "title": "Live Text Destination",
+        "description": "Choose where committed live transcription appears. Direct prompt types stable text into the application where dictation began and requires a model with the Streaming badge.",
+        "options": {
+          "overlay": "Handy overlay",
+          "directPrompt": "Directly in the active prompt"
+        }
+      },
       "pasteMethod": {
         "title": "貼り付け方法",
         "description": "テキストの挿入方法を選択。「直接」はシステム入力でタイピングをシミュレート。「なし」は貼り付けをスキップし、履歴/クリップボードのみ更新。",

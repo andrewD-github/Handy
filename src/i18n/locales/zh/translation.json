@@ -308,6 +308,14 @@
           }
         }
       },
+      "progressiveOutput": {
+        "title": "Live Text Destination",
+        "description": "Choose where committed live transcription appears. Direct prompt types stable text into the application where dictation began and requires a model with the Streaming badge.",
+        "options": {
+          "overlay": "Handy overlay",
+          "directPrompt": "Directly in the active prompt"
+        }
+      },
       "pasteMethod": {
         "title": "粘贴方式",
         "description": "选择文字插入方式。直接：通过系统输入模拟打字。无：跳过粘贴，仅更新历史记录/剪贴板。",

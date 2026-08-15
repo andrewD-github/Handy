@@ -308,6 +308,14 @@
           }
         }
       },
+      "progressiveOutput": {
+        "title": "Live Text Destination",
+        "description": "Choose where committed live transcription appears. Direct prompt types stable text into the application where dictation began and requires a model with the Streaming badge.",
+        "options": {
+          "overlay": "Handy overlay",
+          "directPrompt": "Directly in the active prompt"
+        }
+      },
       "pasteMethod": {
         "title": "Метод вставки",
         "description": "Оберіть спосіб вставки тексту. Прямий: емулює набір тексту. Немає: пропускає вставку, оновлює лише історію/буфер обміну.",

@@ -9,8 +9,7 @@ use crate::managers::transcription::StreamWorkKind;
 use crate::managers::transcription::TranscriptionManager;
 use crate::progressive_dictation::ProgressiveDictationManager;
 use crate::settings::{
-    get_settings, AppSettings, OverlayStyle, ProgressiveOutputMode,
-    APPLE_INTELLIGENCE_PROVIDER_ID,
+    get_settings, AppSettings, OverlayStyle, ProgressiveOutputMode, APPLE_INTELLIGENCE_PROVIDER_ID,
 };
 use crate::shortcut;
 use crate::tray::{change_tray_icon, TrayIconState};
@@ -638,8 +637,7 @@ impl ShortcutAction for TranscribeAction {
         let rm = Arc::clone(&app.state::<Arc<AudioRecordingManager>>());
         let tm = Arc::clone(&app.state::<Arc<TranscriptionManager>>());
         let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
-        let progressive_dictation =
-            Arc::clone(&app.state::<Arc<ProgressiveDictationManager>>());
+        let progressive_dictation = Arc::clone(&app.state::<Arc<ProgressiveDictationManager>>());
         let progressive_generation = progressive_dictation.active_generation();
 
         change_tray_icon(app, TrayIconState::Transcribing);

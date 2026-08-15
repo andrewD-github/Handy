@@ -1397,8 +1397,8 @@ mod tests {
 
     #[test]
     fn progressive_output_mode_defaults_to_official_overlay() {
-        let settings: AppSettings = serde_json::from_value(serde_json::json!({}))
-            .expect("partial settings use defaults");
+        let settings: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("partial settings use defaults");
 
         assert_eq!(
             settings.progressive_output_mode,

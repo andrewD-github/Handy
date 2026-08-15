@@ -22,8 +22,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::settings::APPLE_INTELLIGENCE_DEFAULT_MODEL_ID;
 use crate::settings::{
     self, get_settings, AutoSubmitKey, ClipboardHandling, KeyboardImplementation, LLMPrompt,
-    OverlayPosition, OverlayStyle, PasteMethod, ShortcutBinding, SoundTheme, Theme, TypingTool,
-    APPLE_INTELLIGENCE_PROVIDER_ID,
+    OverlayPosition, OverlayStyle, PasteMethod, ProgressiveOutputMode, ShortcutBinding, SoundTheme,
+    Theme, TypingTool, APPLE_INTELLIGENCE_PROVIDER_ID,
 };
 use crate::tray;
 
@@ -673,6 +673,20 @@ pub fn change_overlay_style_setting(app: AppHandle, style: String) -> Result<(),
     // Reposition in case the window needs to re-center for the new style.
     crate::utils::update_overlay_position(&app);
 
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_progressive_output_mode_setting(app: AppHandle, mode: String) -> Result<(), String> {
+    let parsed = match mode.as_str() {
+        "overlay" => ProgressiveOutputMode::Overlay,
+        "direct_prompt" => ProgressiveOutputMode::DirectPrompt,
+        other => return Err(format!("Invalid progressive output mode: {other}")),
+    };
+    let mut settings = settings::get_settings(&app);
+    settings.progressive_output_mode = parsed;
+    settings::write_settings(&app, settings);
     Ok(())
 }
 

@@ -15,8 +15,8 @@ mod managers;
 mod memory;
 mod overlay;
 mod paste_tx;
-mod progressive_dictation;
 pub mod portable;
+mod progressive_dictation;
 mod secure_input;
 mod settings;
 mod shortcut;
@@ -166,7 +166,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
             model_manager.clone(),
             Some(progressive_dictation.clone()),
         )
-            .expect("Failed to initialize transcription manager"),
+        .expect("Failed to initialize transcription manager"),
     );
     let recording_manager = Arc::new(
         AudioRecordingManager::new(app_handle, transcription_manager.stream_router())
@@ -623,6 +623,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_selected_language_setting,
             shortcut::change_overlay_position_setting,
             shortcut::change_overlay_style_setting,
+            shortcut::change_progressive_output_mode_setting,
             shortcut::change_debug_mode_setting,
             shortcut::change_word_correction_threshold_setting,
             shortcut::change_extra_recording_buffer_setting,

@@ -308,6 +308,14 @@
           }
         }
       },
+      "progressiveOutput": {
+        "title": "Live Text Destination",
+        "description": "Choose where committed live transcription appears. Direct prompt types stable text into the application where dictation began and requires a model with the Streaming badge.",
+        "options": {
+          "overlay": "Handy overlay",
+          "directPrompt": "Directly in the active prompt"
+        }
+      },
       "pasteMethod": {
         "title": "पेस्ट विधि",
         "description": "टेक्स्ट कसरी घुसाइन्छ छान्नुहोस्। डाइरेक्ट: सिस्टम इनपुटमार्फत टाइपिङ अनुकरण गर्छ। कुनै होइन: पेस्ट नगरी हिस्ट्री/क्लिपबोर्ड मात्र अपडेट गर्छ।",
