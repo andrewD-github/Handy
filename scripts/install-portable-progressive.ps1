@@ -52,6 +52,14 @@ function Get-Sha256([string]$Path) {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
 }
 
+function Set-JsonProperty([object]$Object, [string]$Name, [object]$Value) {
+    if ($Object.PSObject.Properties.Name -contains $Name) {
+        $Object.$Name = $Value
+    } else {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+    }
+}
+
 function Stop-HandyAt([string]$ExecutablePath) {
     $fullPath = [System.IO.Path]::GetFullPath($ExecutablePath)
     $processes = Get-CimInstance Win32_Process |
@@ -190,10 +198,10 @@ Copy-Item -LiteralPath $candidateModel -Destination $installedModel -Force
 
 $settingsDocument = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
 $settings = if ($settingsDocument.settings) { $settingsDocument.settings } else { $settingsDocument }
-$settings.selected_model = $ModelId
-$settings.progressive_output_mode = 'direct_prompt'
-$settings.onboarding_completed = $true
-$settings.diagnostic_capture_enabled = $true
+Set-JsonProperty -Object $settings -Name 'selected_model' -Value $ModelId
+Set-JsonProperty -Object $settings -Name 'progressive_output_mode' -Value 'direct_prompt'
+Set-JsonProperty -Object $settings -Name 'onboarding_completed' -Value $true
+Set-JsonProperty -Object $settings -Name 'diagnostic_capture_enabled' -Value $true
 $settingsDocument | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $settingsPath -Encoding UTF8
 
 if ((Get-Sha256 $installedExe) -ne $ExpectedExeSha256.ToUpperInvariant()) {
