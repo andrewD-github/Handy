@@ -18,8 +18,8 @@ use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_specta::Event;
 use transcribe_cpp::{
-    Backend, Feature, Model, ModelOptions, RunExtension, RunOptions, Session, StreamOptions, Task,
-    WhisperRunOptions,
+    Backend, CommitPolicy, Feature, Model, ModelOptions, RunExtension, RunOptions, Session,
+    StreamOptions, Task, WhisperRunOptions,
 };
 use transcribe_rs::{
     onnx::{
@@ -36,6 +36,18 @@ use transcribe_rs::{
 
 const STREAM_PERF_LOG_INTERVAL: Duration = Duration::from_secs(5);
 const STREAM_FINALIZE_REPLY_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn stream_options_for_agreement(stable_prefix_agreement: Option<u32>) -> StreamOptions {
+    StreamOptions {
+        commit_policy: if stable_prefix_agreement.is_some() {
+            CommitPolicy::StablePrefix
+        } else {
+            CommitPolicy::Auto
+        },
+        stable_prefix_agreement_n: stable_prefix_agreement.unwrap_or(0),
+        ..Default::default()
+    }
+}
 
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
@@ -950,10 +962,7 @@ impl TranscriptionManager {
 
             // StreamOptions::default() uses CommitPolicy::Auto and lets the
             // family pick its own streaming strategy (no family-specific ext).
-            let stream_options = StreamOptions {
-                stable_prefix_agreement_n: stable_prefix_agreement.unwrap_or(0),
-                ..Default::default()
-            };
+            let stream_options = stream_options_for_agreement(stable_prefix_agreement);
             let mut stream = match session.stream(&run_options, &stream_options) {
                 Ok(s) => s,
                 Err(e) => {
@@ -2027,6 +2036,17 @@ mod tests {
 
     fn languages(codes: &[&str]) -> Vec<String> {
         codes.iter().map(|code| (*code).to_string()).collect()
+    }
+
+    #[test]
+    fn explicit_agreement_uses_stable_prefix_instead_of_family_auto_policy() {
+        let default = stream_options_for_agreement(None);
+        let tuned = stream_options_for_agreement(Some(2));
+
+        assert_eq!(default.commit_policy, CommitPolicy::Auto);
+        assert_eq!(default.stable_prefix_agreement_n, 0);
+        assert_eq!(tuned.commit_policy, CommitPolicy::StablePrefix);
+        assert_eq!(tuned.stable_prefix_agreement_n, 2);
     }
 
     #[test]
