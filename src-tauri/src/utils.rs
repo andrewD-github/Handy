@@ -87,6 +87,13 @@ pub fn cancel_current_operation(app: &AppHandle) {
     // Abandon any live streaming transcription
     let tm = app.state::<Arc<TranscriptionManager>>();
     tm.cancel_stream();
+    if let Some(progressive) =
+        app.try_state::<Arc<crate::progressive_dictation::ProgressiveDictationManager>>()
+    {
+        if let Some(generation) = progressive.active_generation() {
+            progressive.cancel(generation);
+        }
+    }
 
     // Update tray icon and hide overlay
     change_tray_icon(app, crate::tray::TrayIconState::Idle);

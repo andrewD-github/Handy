@@ -36,6 +36,7 @@ use managers::audio::AudioRecordingManager;
 use managers::history::HistoryManager;
 use managers::model::ModelManager;
 use managers::transcription::TranscriptionManager;
+use progressive_dictation::ProgressiveDictationManager;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use tauri::image::Image;
@@ -158,8 +159,13 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // even before Tauri state is populated.
     let model_manager =
         Arc::new(ModelManager::new(app_handle).expect("Failed to initialize model manager"));
+    let progressive_dictation = Arc::new(ProgressiveDictationManager::new(app_handle.clone()));
     let transcription_manager = Arc::new(
-        TranscriptionManager::new(app_handle, model_manager.clone())
+        TranscriptionManager::new(
+            app_handle,
+            model_manager.clone(),
+            Some(progressive_dictation.clone()),
+        )
             .expect("Failed to initialize transcription manager"),
     );
     let recording_manager = Arc::new(
@@ -180,6 +186,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(recording_manager.clone());
     app_handle.manage(model_manager.clone());
     app_handle.manage(transcription_manager.clone());
+    app_handle.manage(progressive_dictation);
     app_handle.manage(history_manager.clone());
     app_handle.manage(tray::CurrentTrayIconState::new());
 
@@ -844,7 +851,7 @@ pub fn run(cli_args: CliArgs) {
                     ModelManager::new(&app_handle).expect("Failed to initialize model manager"),
                 );
                 let transcription_manager = Arc::new(
-                    TranscriptionManager::new(&app_handle, model_manager.clone())
+                    TranscriptionManager::new(&app_handle, model_manager.clone(), None)
                         .expect("Failed to initialize transcription manager"),
                 );
                 app_handle.manage(model_manager);

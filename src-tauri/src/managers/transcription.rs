@@ -1,6 +1,7 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{EngineType, ModelManager};
+use crate::progressive_dictation::ProgressiveDictationManager;
 use crate::settings::{
     get_settings, AppSettings, ModelUnloadTimeout, OrtAcceleratorSetting,
     TranscribeAcceleratorSetting,
@@ -267,10 +268,15 @@ pub struct TranscriptionManager {
     /// `is_model_loaded()` consults this so the model still reports "loaded"
     /// while the worker holds it.
     active_engine_lease: Arc<AtomicU64>,
+    progressive_dictation: Option<Arc<ProgressiveDictationManager>>,
 }
 
 impl TranscriptionManager {
-    pub fn new(app_handle: &AppHandle, model_manager: Arc<ModelManager>) -> Result<Self> {
+    pub fn new(
+        app_handle: &AppHandle,
+        model_manager: Arc<ModelManager>,
+        progressive_dictation: Option<Arc<ProgressiveDictationManager>>,
+    ) -> Result<Self> {
         let manager = Self {
             engine: Arc::new(Mutex::new(None)),
             model_manager,
@@ -287,6 +293,7 @@ impl TranscriptionManager {
             next_stream_worker_id: Arc::new(AtomicU64::new(1)),
             active_stream_worker: Arc::new(AtomicU64::new(0)),
             active_engine_lease: Arc::new(AtomicU64::new(0)),
+            progressive_dictation,
         };
 
         // Start the idle watcher
@@ -775,7 +782,7 @@ impl TranscriptionManager {
     /// model can't stream, the worker idles until finalize/cancel and reports
     /// `None` so the caller falls back to batch transcription. Frames sent
     /// before the stream begins queue on the channel and are not lost.
-    pub fn start_stream(&self) {
+    pub fn start_stream(&self, progressive_generation: Option<u64>) {
         if self.router.is_open() || self.active_stream_worker.load(Ordering::Acquire) != 0 {
             warn!("start_stream called while a stream worker is already active");
             return;
@@ -793,10 +800,17 @@ impl TranscriptionManager {
         self.stream_active.store(false, Ordering::Release);
 
         let manager = self.clone();
-        thread::spawn(move || manager.run_stream_worker(rx, worker_id));
+        thread::spawn(move || {
+            manager.run_stream_worker(rx, worker_id, progressive_generation)
+        });
     }
 
-    fn run_stream_worker(&self, rx: mpsc::Receiver<StreamCmd>, worker_id: u64) {
+    fn run_stream_worker(
+        &self,
+        rx: mpsc::Receiver<StreamCmd>,
+        worker_id: u64,
+        progressive_generation: Option<u64>,
+    ) {
         let _worker = StreamWorkerGuard {
             worker_id,
             active_stream_worker: Arc::clone(&self.active_stream_worker),
@@ -960,7 +974,11 @@ impl TranscriptionManager {
                                 if update.committed_changed || update.tentative_changed {
                                     let text = stream.text();
                                     perf.record_emit();
-                                    self.emit_stream_text(&text.committed, &text.tentative);
+                                    self.emit_stream_text(
+                                        progressive_generation,
+                                        &text.committed,
+                                        &text.tentative,
+                                    );
                                 }
                                 perf.maybe_log();
                             }
@@ -1101,12 +1119,22 @@ impl TranscriptionManager {
         .emit(&self.app_handle);
     }
 
-    fn emit_stream_text(&self, committed: &str, tentative: &str) {
+    fn emit_stream_text(
+        &self,
+        progressive_generation: Option<u64>,
+        committed: &str,
+        tentative: &str,
+    ) {
         let _ = StreamTextEvent {
             committed: committed.to_string(),
             tentative: tentative.to_string(),
         }
         .emit(&self.app_handle);
+        if let (Some(manager), Some(generation)) =
+            (&self.progressive_dictation, progressive_generation)
+        {
+            manager.apply_snapshot(generation, committed, tentative);
+        }
     }
 
     pub fn transcribe(&self, audio: Vec<f32>) -> Result<String> {

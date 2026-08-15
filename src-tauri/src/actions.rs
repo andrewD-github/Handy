@@ -7,7 +7,11 @@ use crate::managers::history::HistoryManager;
 use crate::managers::model::ModelManager;
 use crate::managers::transcription::StreamWorkKind;
 use crate::managers::transcription::TranscriptionManager;
-use crate::settings::{get_settings, AppSettings, OverlayStyle, APPLE_INTELLIGENCE_PROVIDER_ID};
+use crate::progressive_dictation::ProgressiveDictationManager;
+use crate::settings::{
+    get_settings, AppSettings, OverlayStyle, ProgressiveOutputMode,
+    APPLE_INTELLIGENCE_PROVIDER_ID,
+};
 use crate::shortcut;
 use crate::tray::{change_tray_icon, TrayIconState};
 use crate::utils::{
@@ -513,8 +517,16 @@ impl ShortcutAction for TranscribeAction {
         } else {
             VadPolicy::Offline
         };
+        let progressive_generation = if model_supports_streaming
+            && !self.post_process
+            && settings.progressive_output_mode == ProgressiveOutputMode::DirectPrompt
+        {
+            app.state::<Arc<ProgressiveDictationManager>>().start()
+        } else {
+            None
+        };
         if model_supports_streaming {
-            tm.start_stream();
+            tm.start_stream(progressive_generation);
         }
         let plan_elapsed = plan_started.elapsed();
 
@@ -626,6 +638,9 @@ impl ShortcutAction for TranscribeAction {
         let rm = Arc::clone(&app.state::<Arc<AudioRecordingManager>>());
         let tm = Arc::clone(&app.state::<Arc<TranscriptionManager>>());
         let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
+        let progressive_dictation =
+            Arc::clone(&app.state::<Arc<ProgressiveDictationManager>>());
+        let progressive_generation = progressive_dictation.active_generation();
 
         change_tray_icon(app, TrayIconState::Transcribing);
         // Stop should give immediate visual feedback. Live streaming can keep
@@ -748,6 +763,14 @@ impl ShortcutAction for TranscribeAction {
                                 transcription
                             );
 
+                            let progressive_owns_output = progressive_generation
+                                .map(|generation| {
+                                    progressive_dictation
+                                        .finish(generation, &transcription)
+                                        .owns_output
+                                })
+                                .unwrap_or(false);
+
                             if post_process {
                                 if use_streaming_overlay {
                                     tm.emit_stream_working(StreamWorkKind::Polishing);
@@ -787,7 +810,7 @@ impl ShortcutAction for TranscribeAction {
                                 }
                             }
 
-                            if processed.final_text.is_empty() {
+                            if processed.final_text.is_empty() || progressive_owns_output {
                                 utils::hide_recording_overlay(&ah);
                                 change_tray_icon(&ah, TrayIconState::Idle);
                             } else {

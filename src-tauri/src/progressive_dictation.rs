@@ -1,3 +1,7 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use tauri::AppHandle;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TargetIdentity {
     foreground_window: isize,
@@ -43,6 +47,12 @@ pub(crate) enum ProgressiveDecision {
         committed: String,
         final_text: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProgressiveCompletion {
+    pub(crate) decision: ProgressiveDecision,
+    pub(crate) owns_output: bool,
 }
 
 pub(crate) struct ProgressiveSession {
@@ -117,6 +127,10 @@ impl ProgressiveSession {
         self.target
     }
 
+    fn generation(&self) -> u64 {
+        self.generation
+    }
+
     fn cancel(&mut self) {
         self.stopped = true;
     }
@@ -161,6 +175,7 @@ impl PromptEditor for RuntimePromptEditor {
 pub(crate) struct ProgressiveCoordinator<E> {
     editor: E,
     session: Option<ProgressiveSession>,
+    owns_output: bool,
 }
 
 impl<E: PromptEditor> ProgressiveCoordinator<E> {
@@ -168,11 +183,13 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
         Self {
             editor,
             session: None,
+            owns_output: false,
         }
     }
 
     pub(crate) fn start(&mut self, generation: u64, target: TargetIdentity) {
         self.session = Some(ProgressiveSession::start(generation, target));
+        self.owns_output = true;
     }
 
     pub(crate) fn apply_snapshot(
@@ -204,13 +221,148 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
 
         decision
     }
+
+    pub(crate) fn finish(
+        &mut self,
+        generation: u64,
+        final_text: &str,
+    ) -> ProgressiveCompletion {
+        let Some(session) = self.session.as_mut() else {
+            return ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::Stopped),
+                owns_output: false,
+            };
+        };
+        if session.generation() != generation {
+            return ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::StaleGeneration),
+                owns_output: false,
+            };
+        }
+        let decision = session.finish(generation, final_text);
+        let ProgressiveDecision::Append(text) = &decision else {
+            return ProgressiveCompletion {
+                decision,
+                owns_output: self.owns_output,
+            };
+        };
+
+        if !self
+            .editor
+            .current_target()
+            .is_some_and(|current| session.target().matches(current))
+        {
+            return ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged),
+                owns_output: self.owns_output,
+            };
+        }
+        if self.editor.append(text).is_err() {
+            return ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::EditFailed),
+                owns_output: self.owns_output,
+            };
+        }
+
+        ProgressiveCompletion {
+            decision,
+            owns_output: self.owns_output,
+        }
+    }
+
+    pub(crate) fn cancel(&mut self, generation: u64) {
+        if let Some(session) = self.session.as_mut() {
+            if session.generation() == generation {
+                session.cancel();
+                self.owns_output = false;
+            }
+        }
+    }
+}
+
+pub(crate) struct ProgressiveDictationManager {
+    coordinator: Mutex<ProgressiveCoordinator<RuntimePromptEditor>>,
+    next_generation: AtomicU64,
+    active_generation: AtomicU64,
+}
+
+impl ProgressiveDictationManager {
+    pub(crate) fn new(app: AppHandle) -> Self {
+        Self {
+            coordinator: Mutex::new(ProgressiveCoordinator::new(RuntimePromptEditor::new(app))),
+            next_generation: AtomicU64::new(1),
+            active_generation: AtomicU64::new(0),
+        }
+    }
+
+    pub(crate) fn start(&self) -> Option<u64> {
+        let Some(target) = crate::input::capture_target_identity() else {
+            log::warn!("Direct-prompt session not started: target identity unavailable");
+            self.active_generation.store(0, Ordering::Release);
+            return None;
+        };
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        self.coordinator.lock().unwrap().start(generation, target);
+        self.active_generation
+            .store(generation, Ordering::Release);
+        Some(generation)
+    }
+
+    pub(crate) fn active_generation(&self) -> Option<u64> {
+        let generation = self.active_generation.load(Ordering::Acquire);
+        (generation != 0).then_some(generation)
+    }
+
+    pub(crate) fn apply_snapshot(&self, generation: u64, committed: &str, tentative: &str) {
+        let decision = self.coordinator.lock().unwrap().apply_snapshot(
+            generation,
+            committed,
+            tentative,
+        );
+        log::debug!(
+            "Progressive snapshot decision: generation={generation}, committed_chars={}, tentative_chars={}, decision={decision:?}",
+            committed.chars().count(),
+            tentative.chars().count(),
+        );
+    }
+
+    pub(crate) fn finish(&self, generation: u64, final_text: &str) -> ProgressiveCompletion {
+        let completion = self
+            .coordinator
+            .lock()
+            .unwrap()
+            .finish(generation, final_text);
+        let _ = self.active_generation.compare_exchange(
+            generation,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+        log::debug!(
+            "Progressive final decision: generation={generation}, final_chars={}, owns_output={}, decision={:?}",
+            final_text.chars().count(),
+            completion.owns_output,
+            completion.decision,
+        );
+        completion
+    }
+
+    pub(crate) fn cancel(&self, generation: u64) {
+        self.coordinator.lock().unwrap().cancel(generation);
+        let _ = self.active_generation.compare_exchange(
+            generation,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ProgressiveCoordinator, ProgressiveDecision, ProgressiveSession, ProgressiveSkipReason,
-        PromptEditor, TargetIdentity,
+        ProgressiveCompletion, ProgressiveCoordinator, ProgressiveDecision, ProgressiveSession,
+        ProgressiveSkipReason, PromptEditor, TargetIdentity,
     };
     use std::sync::{Arc, Mutex};
 
@@ -304,6 +456,105 @@ mod tests {
     }
 
     #[test]
+    fn final_tail_is_inserted_once_and_marks_output_owned() {
+        let target = TargetIdentity::test(10, 20);
+        let editor = Arc::new(FakeEditor::new(target));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, target);
+        coordinator.apply_snapshot(7, "hello", "");
+
+        assert_eq!(
+            coordinator.finish(7, "hello world"),
+            ProgressiveCompletion {
+                decision: ProgressiveDecision::Append(" world".into()),
+                owns_output: true,
+            }
+        );
+        assert_eq!(editor.inserts(), vec!["hello", " world"]);
+    }
+
+    #[test]
+    fn new_generation_makes_old_updates_and_finalization_stale() {
+        let target = TargetIdentity::test(10, 20);
+        let editor = Arc::new(FakeEditor::new(target));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, target);
+        coordinator.start(8, target);
+
+        assert_eq!(
+            coordinator.apply_snapshot(7, "old text", ""),
+            ProgressiveDecision::Skip(ProgressiveSkipReason::StaleGeneration)
+        );
+        assert_eq!(
+            coordinator.finish(7, "old text"),
+            ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::StaleGeneration),
+                owns_output: false,
+            }
+        );
+        assert!(editor.inserts().is_empty());
+    }
+
+    #[test]
+    fn cancelled_session_never_edits_or_owns_output() {
+        let target = TargetIdentity::test(10, 20);
+        let editor = Arc::new(FakeEditor::new(target));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, target);
+        coordinator.cancel(7);
+
+        assert_eq!(
+            coordinator.apply_snapshot(7, "late text", ""),
+            ProgressiveDecision::Skip(ProgressiveSkipReason::Stopped)
+        );
+        assert_eq!(
+            coordinator.finish(7, "late text"),
+            ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::Stopped),
+                owns_output: false,
+            }
+        );
+        assert!(editor.inserts().is_empty());
+    }
+
+    #[test]
+    fn target_change_after_live_insert_blocks_final_fallback() {
+        let target = TargetIdentity::test(10, 20);
+        let editor = Arc::new(FakeEditor::new(target));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, target);
+        coordinator.apply_snapshot(7, "hello", "");
+        editor.set_target(TargetIdentity::test(10, 30));
+
+        assert_eq!(
+            coordinator.finish(7, "hello world"),
+            ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged),
+                owns_output: true,
+            }
+        );
+        assert_eq!(editor.inserts(), vec!["hello"]);
+    }
+
+    #[test]
+    fn target_change_before_first_insert_still_blocks_final_fallback() {
+        let target = TargetIdentity::test(10, 20);
+        let editor = Arc::new(FakeEditor::new(target));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, target);
+        editor.set_target(TargetIdentity::test(10, 30));
+
+        assert_eq!(
+            coordinator.finish(7, "hello"),
+            ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged),
+                owns_output: true,
+            }
+        );
+        assert!(editor.inserts().is_empty());
+    }
+
+    #[test]
     fn first_committed_snapshot_appends_full_prefix() {
         let mut session = ProgressiveSession::start(7, TargetIdentity::test(10, 20));
 
@@ -384,4 +635,3 @@ mod tests {
         );
     }
 }
-use tauri::AppHandle;
