@@ -782,7 +782,11 @@ impl TranscriptionManager {
     /// model can't stream, the worker idles until finalize/cancel and reports
     /// `None` so the caller falls back to batch transcription. Frames sent
     /// before the stream begins queue on the channel and are not lost.
-    pub fn start_stream(&self, progressive_generation: Option<u64>) {
+    pub fn start_stream(
+        &self,
+        progressive_generation: Option<u64>,
+        stable_prefix_agreement: Option<u32>,
+    ) {
         if self.router.is_open() || self.active_stream_worker.load(Ordering::Acquire) != 0 {
             warn!("start_stream called while a stream worker is already active");
             return;
@@ -800,7 +804,14 @@ impl TranscriptionManager {
         self.stream_active.store(false, Ordering::Release);
 
         let manager = self.clone();
-        thread::spawn(move || manager.run_stream_worker(rx, worker_id, progressive_generation));
+        thread::spawn(move || {
+            manager.run_stream_worker(
+                rx,
+                worker_id,
+                progressive_generation,
+                stable_prefix_agreement,
+            )
+        });
     }
 
     fn run_stream_worker(
@@ -808,6 +819,7 @@ impl TranscriptionManager {
         rx: mpsc::Receiver<StreamCmd>,
         worker_id: u64,
         progressive_generation: Option<u64>,
+        stable_prefix_agreement: Option<u32>,
     ) {
         let _worker = StreamWorkerGuard {
             worker_id,
@@ -938,7 +950,11 @@ impl TranscriptionManager {
 
             // StreamOptions::default() uses CommitPolicy::Auto and lets the
             // family pick its own streaming strategy (no family-specific ext).
-            let mut stream = match session.stream(&run_options, &StreamOptions::default()) {
+            let stream_options = StreamOptions {
+                stable_prefix_agreement_n: stable_prefix_agreement.unwrap_or(0),
+                ..Default::default()
+            };
+            let mut stream = match session.stream(&run_options, &stream_options) {
                 Ok(s) => s,
                 Err(e) => {
                     error!("Failed to begin stream: {}", e);

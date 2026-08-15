@@ -525,7 +525,7 @@ impl ShortcutAction for TranscribeAction {
             None
         };
         if model_supports_streaming {
-            tm.start_stream(progressive_generation);
+            tm.start_stream(progressive_generation, None);
         }
         let plan_elapsed = plan_started.elapsed();
 

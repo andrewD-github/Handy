@@ -41,3 +41,16 @@ def test_build_command_requests_production_stream_replay() -> None:
     assert "--stream-replay" in command
     assert "--realtime" in command
     assert "--ort-accelerator" not in command
+
+
+def test_build_command_passes_stable_prefix_agreement() -> None:
+    command = build_command(
+        Path("handy.exe"),
+        Path("audio.wav"),
+        "streaming-model",
+        stream_replay=True,
+        stable_prefix_agreement=2,
+    )
+
+    index = command.index("--stable-prefix-agreement")
+    assert command[index + 1] == "2"

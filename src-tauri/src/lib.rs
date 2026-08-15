@@ -555,7 +555,7 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
             },
         );
 
-        tm.start_stream(None);
+        tm.start_stream(None, args.stable_prefix_agreement);
         let router = tm.stream_router();
         const CHUNK_SAMPLES: usize = 1_600;
         for chunk in samples.chunks(CHUNK_SAMPLES) {
@@ -598,6 +598,7 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
                     "load_ms": load_ms,
                     "stream_realtime": args.realtime,
                     "stream_chunk_ms": 100,
+                    "stable_prefix_agreement": args.stable_prefix_agreement,
                     "first_visible_ms": first_visible_ms,
                     "stop_to_final_ms": stop_to_final_ms,
                     "stream_updates": snapshots,

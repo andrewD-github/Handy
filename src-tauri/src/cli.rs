@@ -67,6 +67,11 @@ pub struct CliArgs {
     #[arg(long, requires = "stream_replay")]
     pub realtime: bool,
 
+    /// Override consecutive agreement passes for committed streaming text.
+    /// Replay-lab only; normal app streaming uses the engine default.
+    #[arg(long, requires = "stream_replay", value_name = "N")]
+    pub stable_prefix_agreement: Option<u32>,
+
     /// Emit --transcribe-file results as JSON.
     #[arg(long)]
     pub json: bool,
@@ -90,5 +95,20 @@ mod tests {
 
         assert!(args.stream_replay);
         assert!(args.realtime);
+    }
+
+    #[test]
+    fn streaming_replay_accepts_an_explicit_stable_prefix_agreement() {
+        let args = CliArgs::try_parse_from([
+            "handy",
+            "--transcribe-file",
+            "saved.wav",
+            "--stream-replay",
+            "--stable-prefix-agreement",
+            "2",
+        ])
+        .unwrap();
+
+        assert_eq!(args.stable_prefix_agreement, Some(2));
     }
 }

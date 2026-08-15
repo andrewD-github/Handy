@@ -21,6 +21,7 @@ def build_command(
     ort_accelerator: str | None = None,
     repeat: int = 1,
     stream_replay: bool = False,
+    stable_prefix_agreement: int | None = None,
 ) -> list[str]:
     command = [
         str(executable),
@@ -38,6 +39,8 @@ def build_command(
         command.extend(["--ort-accelerator", ort_accelerator])
     if stream_replay:
         command.extend(["--stream-replay", "--realtime"])
+    if stable_prefix_agreement is not None:
+        command.extend(["--stable-prefix-agreement", str(stable_prefix_agreement)])
     return command
 
 
@@ -58,6 +61,7 @@ def main() -> int:
     parser.add_argument("--ort-accelerator", choices=["auto", "cpu", "directml"])
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--stream-replay", action="store_true")
+    parser.add_argument("--stable-prefix-agreement", type=int)
     args = parser.parse_args()
 
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -97,6 +101,7 @@ def main() -> int:
                             args.ort_accelerator,
                             args.repeat,
                             args.stream_replay,
+                            args.stable_prefix_agreement,
                         ),
                         timeout_seconds=args.timeout,
                     )
