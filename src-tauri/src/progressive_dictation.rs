@@ -22,7 +22,7 @@ impl TargetIdentity {
         }
     }
 
-    fn matches(self, current: TargetIdentity) -> bool {
+    pub(crate) fn matches(self, current: TargetIdentity) -> bool {
         self == current
     }
 
@@ -153,9 +153,18 @@ impl ProgressiveSession {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PromptEditError {
+    TargetChanged,
+    EditFailed,
+}
+
 pub(crate) trait PromptEditor {
-    fn current_target(&self) -> Option<TargetIdentity>;
-    fn append(&self, text: &str) -> Result<(), String>;
+    fn append_verified(
+        &self,
+        expected_target: TargetIdentity,
+        text: &str,
+    ) -> Result<(), PromptEditError>;
 }
 
 pub(crate) struct RuntimePromptEditor {
@@ -169,30 +178,38 @@ impl RuntimePromptEditor {
 }
 
 impl PromptEditor for RuntimePromptEditor {
-    fn current_target(&self) -> Option<TargetIdentity> {
-        crate::input::capture_target_identity()
-    }
-
-    fn append(&self, text: &str) -> Result<(), String> {
+    fn append_verified(
+        &self,
+        expected_target: TargetIdentity,
+        text: &str,
+    ) -> Result<(), PromptEditError> {
         let (sender, receiver) = std::sync::mpsc::channel();
         let app = self.app.clone();
         let insertion = text.to_string();
         self.app
             .run_on_main_thread(move || {
-                let result = crate::clipboard::insert_progressive_text(&insertion, &app);
+                let result = crate::input::with_verified_target(expected_target, || {
+                    crate::clipboard::insert_progressive_text(&insertion, &app)
+                })
+                .map_err(|error| match error {
+                    crate::input::VerifiedTargetError::TargetChanged
+                    | crate::input::VerifiedTargetError::MonitorUnavailable => {
+                        PromptEditError::TargetChanged
+                    }
+                    crate::input::VerifiedTargetError::Action(_) => PromptEditError::EditFailed,
+                });
                 let _ = sender.send(result);
             })
-            .map_err(|error| format!("Failed to schedule progressive insertion: {error:?}"))?;
-        receiver
-            .recv()
-            .map_err(|error| format!("Failed to receive progressive insertion result: {error}"))?
+            .map_err(|_| PromptEditError::EditFailed)?;
+        receiver.recv().map_err(|_| PromptEditError::EditFailed)?
     }
 }
 
 pub(crate) struct ProgressiveCoordinator<E> {
     editor: E,
     session: Option<ProgressiveSession>,
-    owns_output: bool,
+    inserted_any: bool,
+    unsafe_target: bool,
 }
 
 impl<E: PromptEditor> ProgressiveCoordinator<E> {
@@ -200,13 +217,15 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
         Self {
             editor,
             session: None,
-            owns_output: false,
+            inserted_any: false,
+            unsafe_target: false,
         }
     }
 
     pub(crate) fn start(&mut self, generation: u64, target: TargetIdentity) {
         self.session = Some(ProgressiveSession::start(generation, target));
-        self.owns_output = true;
+        self.inserted_any = false;
+        self.unsafe_target = false;
     }
 
     pub(crate) fn apply_snapshot(
@@ -223,17 +242,17 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
             return decision;
         };
 
-        if !self
-            .editor
-            .current_target()
-            .is_some_and(|current| session.target().matches(current))
-        {
-            session.cancel();
-            return ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged);
-        }
-        if self.editor.append(text).is_err() {
-            session.cancel();
-            return ProgressiveDecision::Skip(ProgressiveSkipReason::EditFailed);
+        match self.editor.append_verified(session.target(), text) {
+            Ok(()) => self.inserted_any = true,
+            Err(PromptEditError::TargetChanged) => {
+                session.cancel();
+                self.unsafe_target = true;
+                return ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged);
+            }
+            Err(PromptEditError::EditFailed) => {
+                session.cancel();
+                return ProgressiveDecision::Skip(ProgressiveSkipReason::EditFailed);
+            }
         }
 
         decision
@@ -256,30 +275,30 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
         let ProgressiveDecision::Append(text) = &decision else {
             return ProgressiveCompletion {
                 decision,
-                owns_output: self.owns_output,
+                owns_output: self.inserted_any || self.unsafe_target,
             };
         };
 
-        if !self
-            .editor
-            .current_target()
-            .is_some_and(|current| session.target().matches(current))
-        {
-            return ProgressiveCompletion {
-                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged),
-                owns_output: self.owns_output,
-            };
-        }
-        if self.editor.append(text).is_err() {
-            return ProgressiveCompletion {
-                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::EditFailed),
-                owns_output: self.owns_output,
-            };
+        match self.editor.append_verified(session.target(), text) {
+            Ok(()) => self.inserted_any = true,
+            Err(PromptEditError::TargetChanged) => {
+                self.unsafe_target = true;
+                return ProgressiveCompletion {
+                    decision: ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged),
+                    owns_output: true,
+                };
+            }
+            Err(PromptEditError::EditFailed) => {
+                return ProgressiveCompletion {
+                    decision: ProgressiveDecision::Skip(ProgressiveSkipReason::EditFailed),
+                    owns_output: self.inserted_any,
+                };
+            }
         }
 
         ProgressiveCompletion {
             decision,
-            owns_output: self.owns_output,
+            owns_output: self.inserted_any || self.unsafe_target,
         }
     }
 
@@ -287,7 +306,8 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
         if let Some(session) = self.session.as_mut() {
             if session.generation() == generation {
                 session.cancel();
-                self.owns_output = false;
+                self.inserted_any = false;
+                self.unsafe_target = false;
             }
         }
     }
@@ -313,6 +333,13 @@ impl ProgressiveDictationManager {
     }
 
     pub(crate) fn start(&self) -> Option<u64> {
+        if !crate::input::target_interaction_monitor_ready() {
+            log::error!(
+                "Direct-prompt session not started: target interaction monitor unavailable"
+            );
+            self.active_generation.store(0, Ordering::Release);
+            return None;
+        }
         let Some(target) = crate::input::capture_target_identity() else {
             log::warn!("Direct-prompt session not started: target identity unavailable");
             self.active_generation.store(0, Ordering::Release);
@@ -438,12 +465,14 @@ impl ProgressiveDictationManager {
 mod tests {
     use super::{
         ProgressiveCompletion, ProgressiveCoordinator, ProgressiveDecision, ProgressiveSession,
-        ProgressiveSkipReason, PromptEditor, TargetIdentity,
+        ProgressiveSkipReason, PromptEditError, PromptEditor, TargetIdentity,
     };
     use std::sync::{Arc, Mutex};
 
     struct FakeEditor {
         current_target: Mutex<Option<TargetIdentity>>,
+        target_on_next_append: Mutex<Option<TargetIdentity>>,
+        fail_next_append: Mutex<bool>,
         inserts: Mutex<Vec<String>>,
     }
 
@@ -451,6 +480,8 @@ mod tests {
         fn new(target: TargetIdentity) -> Self {
             Self {
                 current_target: Mutex::new(Some(target)),
+                target_on_next_append: Mutex::new(None),
+                fail_next_append: Mutex::new(false),
                 inserts: Mutex::new(Vec::new()),
             }
         }
@@ -462,14 +493,36 @@ mod tests {
         fn inserts(&self) -> Vec<String> {
             self.inserts.lock().unwrap().clone()
         }
+
+        fn change_target_during_next_append(&self, target: TargetIdentity) {
+            *self.target_on_next_append.lock().unwrap() = Some(target);
+        }
+
+        fn fail_next_append(&self) {
+            *self.fail_next_append.lock().unwrap() = true;
+        }
     }
 
     impl PromptEditor for Arc<FakeEditor> {
-        fn current_target(&self) -> Option<TargetIdentity> {
-            *self.current_target.lock().unwrap()
-        }
-
-        fn append(&self, text: &str) -> Result<(), String> {
+        fn append_verified(
+            &self,
+            expected_target: TargetIdentity,
+            text: &str,
+        ) -> Result<(), PromptEditError> {
+            if let Some(target) = self.target_on_next_append.lock().unwrap().take() {
+                *self.current_target.lock().unwrap() = Some(target);
+            }
+            if !self
+                .current_target
+                .lock()
+                .unwrap()
+                .is_some_and(|current| expected_target.matches(current))
+            {
+                return Err(PromptEditError::TargetChanged);
+            }
+            if std::mem::take(&mut *self.fail_next_append.lock().unwrap()) {
+                return Err(PromptEditError::EditFailed);
+            }
             self.inserts.lock().unwrap().push(text.to_string());
             Ok(())
         }
@@ -535,6 +588,42 @@ mod tests {
         assert_eq!(
             coordinator.apply_snapshot(7, "hello world", ""),
             ProgressiveDecision::Skip(ProgressiveSkipReason::Stopped)
+        );
+    }
+
+    #[test]
+    fn target_change_after_queueing_is_rechecked_inside_the_edit_operation() {
+        let target = TargetIdentity::test(10, 20);
+        let editor = Arc::new(FakeEditor::new(target));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, target);
+        editor.change_target_during_next_append(TargetIdentity::test_with_interaction(10, 20, 1));
+
+        assert_eq!(
+            coordinator.apply_snapshot(7, "late text", ""),
+            ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged)
+        );
+        assert!(editor.inserts().is_empty());
+    }
+
+    #[test]
+    fn failed_first_edit_allows_normal_final_fallback() {
+        let target = TargetIdentity::test(10, 20);
+        let editor = Arc::new(FakeEditor::new(target));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, target);
+        editor.fail_next_append();
+
+        assert_eq!(
+            coordinator.apply_snapshot(7, "hello", ""),
+            ProgressiveDecision::Skip(ProgressiveSkipReason::EditFailed)
+        );
+        assert_eq!(
+            coordinator.finish(7, "hello"),
+            ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::Stopped),
+                owns_output: false,
+            }
         );
     }
 

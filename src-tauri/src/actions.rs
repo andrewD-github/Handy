@@ -22,7 +22,7 @@ use log::{debug, error, warn};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::Manager;
 use tauri::{AppHandle, Emitter};
@@ -59,6 +59,7 @@ pub trait ShortcutAction: Send + Sync {
 // Transcribe Action
 struct TranscribeAction {
     post_process: bool,
+    progressive_generation: Mutex<Option<u64>>,
 }
 
 /// Field name for structured output JSON schema
@@ -497,6 +498,10 @@ impl ShortcutAction for TranscribeAction {
         let plan_started = Instant::now();
         let settings = get_settings(app);
         let is_always_on = settings.always_on_microphone;
+        let progressive_dictation = Arc::clone(&app.state::<Arc<ProgressiveDictationManager>>());
+        if let Some(stale_generation) = self.progressive_generation.lock().unwrap().take() {
+            progressive_dictation.cancel(stale_generation);
+        }
 
         let selected_model_info = app
             .state::<Arc<ModelManager>>()
@@ -516,16 +521,21 @@ impl ShortcutAction for TranscribeAction {
         } else {
             VadPolicy::Offline
         };
-        let progressive_generation = if model_supports_streaming
+        let mut progressive_generation = if model_supports_streaming
             && !self.post_process
             && settings.progressive_output_mode == ProgressiveOutputMode::DirectPrompt
         {
-            app.state::<Arc<ProgressiveDictationManager>>().start()
+            progressive_dictation.start()
         } else {
             None
         };
-        if model_supports_streaming {
-            tm.start_stream(progressive_generation, None);
+        if model_supports_streaming && !tm.start_stream(progressive_generation, None) {
+            if let Some(generation) = progressive_generation.take() {
+                progressive_dictation.cancel(generation);
+            }
+        }
+        if let Some(generation) = progressive_generation {
+            *self.progressive_generation.lock().unwrap() = Some(generation);
         }
         let plan_elapsed = plan_started.elapsed();
 
@@ -600,6 +610,9 @@ impl ShortcutAction for TranscribeAction {
             // Starting failed (for example due to blocked microphone permissions).
             // Revert UI state so we don't stay stuck in the recording overlay.
             tm.cancel_stream();
+            if let Some(generation) = self.progressive_generation.lock().unwrap().take() {
+                progressive_dictation.cancel(generation);
+            }
             utils::hide_recording_overlay(app);
             change_tray_icon(app, TrayIconState::Idle);
             if let Some(err) = recording_error {
@@ -638,7 +651,7 @@ impl ShortcutAction for TranscribeAction {
         let tm = Arc::clone(&app.state::<Arc<TranscriptionManager>>());
         let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
         let progressive_dictation = Arc::clone(&app.state::<Arc<ProgressiveDictationManager>>());
-        let progressive_generation = progressive_dictation.active_generation();
+        let progressive_generation = self.progressive_generation.lock().unwrap().take();
 
         change_tray_icon(app, TrayIconState::Transcribing);
         // Stop should give immediate visual feedback. Live streaming can keep
@@ -683,6 +696,9 @@ impl ShortcutAction for TranscribeAction {
                 if rm.was_cancelled_since(cancel_generation) {
                     debug!("Transcription operation cancelled after recording stop");
                     tm.cancel_stream();
+                    if let Some(generation) = progressive_generation {
+                        progressive_dictation.cancel(generation);
+                    }
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
                     return;
@@ -693,6 +709,9 @@ impl ShortcutAction for TranscribeAction {
                     // Tear down any streaming worker so its channel doesn't leak
                     // and block the next start_stream.
                     tm.cancel_stream();
+                    if let Some(generation) = progressive_generation {
+                        progressive_dictation.cancel(generation);
+                    }
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
                 } else {
@@ -748,6 +767,9 @@ impl ShortcutAction for TranscribeAction {
 
                     if rm.was_cancelled_since(cancel_generation) {
                         debug!("Transcription operation cancelled before output handling");
+                        if let Some(generation) = progressive_generation {
+                            progressive_dictation.cancel(generation);
+                        }
                         utils::hide_recording_overlay(&ah);
                         change_tray_icon(&ah, TrayIconState::Idle);
                         return;
@@ -849,12 +871,18 @@ impl ShortcutAction for TranscribeAction {
                                 debug!(
                                     "Transcription operation cancelled after transcription error"
                                 );
+                                if let Some(generation) = progressive_generation {
+                                    progressive_dictation.cancel(generation);
+                                }
                                 utils::hide_recording_overlay(&ah);
                                 change_tray_icon(&ah, TrayIconState::Idle);
                                 return;
                             }
 
                             error!("Transcription failed: {}", err);
+                            if let Some(generation) = progressive_generation {
+                                progressive_dictation.cancel(generation);
+                            }
                             // Surface the failure to the UI (toast). The full
                             // message is also in handy.log via the line above.
                             let _ = ah.emit("transcription-error", err.to_string());
@@ -879,6 +907,9 @@ impl ShortcutAction for TranscribeAction {
                 debug!("No samples retrieved from recording stop");
                 // Tear down any streaming worker so its channel doesn't leak.
                 tm.cancel_stream();
+                if let Some(generation) = progressive_generation {
+                    progressive_dictation.cancel(generation);
+                }
                 utils::hide_recording_overlay(&ah);
                 change_tray_icon(&ah, TrayIconState::Idle);
             }
@@ -934,11 +965,15 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
         "transcribe".to_string(),
         Arc::new(TranscribeAction {
             post_process: false,
+            progressive_generation: Mutex::new(None),
         }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
         "transcribe_with_post_process".to_string(),
-        Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
+        Arc::new(TranscribeAction {
+            post_process: true,
+            progressive_generation: Mutex::new(None),
+        }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
         "cancel".to_string(),

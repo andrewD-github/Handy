@@ -52,6 +52,32 @@ function Get-Sha256([string]$Path) {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
 }
 
+function Get-TreeHashes([string]$Root) {
+    $hashes = [ordered]@{}
+    Get-ChildItem -LiteralPath $Root -File -Recurse | Sort-Object FullName | ForEach-Object {
+        $relative = $_.FullName.Substring([System.IO.Path]::GetFullPath($Root).TrimEnd('\').Length + 1)
+        $hashes[$relative] = Get-Sha256 $_.FullName
+    }
+    $hashes
+}
+
+function Assert-TreeHashes([string]$Root, [object]$Expected, [string]$Label) {
+    $actual = Get-TreeHashes $Root
+    $expectedEntries = if ($Expected -is [System.Collections.IDictionary]) {
+        $Expected.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Name = $_.Key; Value = $_.Value } }
+    } else {
+        $Expected.PSObject.Properties
+    }
+    foreach ($entry in $expectedEntries) {
+        if (-not $actual.Contains([string]$entry.Name) -or $actual[[string]$entry.Name] -ne [string]$entry.Value) {
+            throw "$Label hash verification failed: $($entry.Name)"
+        }
+    }
+    if ($actual.Count -ne @($expectedEntries).Count) {
+        throw "$Label file-count verification failed."
+    }
+}
+
 function Set-JsonProperty([object]$Object, [string]$Name, [object]$Value) {
     if ($Object.PSObject.Properties.Name -contains $Name) {
         $Object.$Name = $Value
@@ -83,6 +109,9 @@ function Restore-Install([string]$ManifestPath) {
         Assert-UnderRoot -Path $target -Root $targetRoot
         if ([bool]$entry.existed) {
             Copy-Item -LiteralPath (Join-Path $backupRoot ([string]$entry.backup_path)) -Destination $target -Force
+            if ((Get-Sha256 $target) -ne [string]$entry.original_sha256) {
+                throw "Rollback runtime verification failed: $($entry.relative_path)"
+            }
         } elseif (Test-Path -LiteralPath $target) {
             Remove-Item -LiteralPath $target -Force
         }
@@ -95,17 +124,24 @@ function Restore-Install([string]$ManifestPath) {
     }
     if ([bool]$manifest.resources_existed) {
         Copy-Item -LiteralPath (Join-Path $backupRoot 'resources') -Destination $resources -Recurse
+        Assert-TreeHashes -Root $resources -Expected $manifest.original_resource_hashes -Label 'Rollback resources'
     }
 
     $modelTarget = Join-Path $targetRoot ([string]$manifest.model_relative_path)
     Assert-UnderRoot -Path $modelTarget -Root $targetRoot
     if ([bool]$manifest.model_existed) {
         Copy-Item -LiteralPath (Join-Path $backupRoot 'model' $ModelFileName) -Destination $modelTarget -Force
+        if ((Get-Sha256 $modelTarget) -ne [string]$manifest.original_model_sha256) {
+            throw 'Rollback model verification failed.'
+        }
     } elseif (Test-Path -LiteralPath $modelTarget) {
         Remove-Item -LiteralPath $modelTarget -Force
     }
 
     Copy-Item -LiteralPath (Join-Path $backupRoot 'settings_store.json') -Destination (Join-Path $targetRoot 'Data\settings_store.json') -Force
+    if ((Get-Sha256 (Join-Path $targetRoot 'Data\settings_store.json')) -ne [string]$manifest.settings_sha256) {
+        throw 'Rollback settings verification failed.'
+    }
     Start-Process -FilePath (Join-Path $targetRoot 'handy.exe')
     Write-Output "Rollback complete: $backupRoot"
 }
@@ -140,87 +176,109 @@ if ((Get-Sha256 $candidateModel) -ne $ModelSha256) {
     throw 'Nemotron model hash does not match Handy catalog.'
 }
 
+Stop-HandyAt $installedExe
+if (Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $installedExe }) {
+    throw 'Installed Handy process did not stop; refusing to create a racing backup.'
+}
+
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $backupRoot = Join-Path (Split-Path -Parent $InstallRoot) "Handy-backups\progressive-$stamp"
-New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
-Copy-Item -LiteralPath $settingsPath -Destination (Join-Path $backupRoot 'settings_store.json')
+try {
+    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+    Copy-Item -LiteralPath $settingsPath -Destination (Join-Path $backupRoot 'settings_store.json')
 
-$fileManifest = @()
-foreach ($name in $RuntimeFiles) {
-    $source = Join-Path $CandidateRoot $name
-    if (-not (Test-Path -LiteralPath $source)) {
-        throw "Candidate runtime file is missing: $source"
+    $fileManifest = @()
+    foreach ($name in $RuntimeFiles) {
+        $source = Join-Path $CandidateRoot $name
+        if (-not (Test-Path -LiteralPath $source)) { throw "Candidate runtime file is missing: $source" }
+        $target = Join-Path $InstallRoot $name
+        Assert-UnderRoot -Path $target -Root $InstallRoot
+        $existed = Test-Path -LiteralPath $target
+        $backupPath = "runtime\$name"
+        $originalHash = if ($existed) { Get-Sha256 $target } else { $null }
+        if ($existed) {
+            New-Item -ItemType Directory -Path (Join-Path $backupRoot 'runtime') -Force | Out-Null
+            Copy-Item -LiteralPath $target -Destination (Join-Path $backupRoot $backupPath)
+        }
+        $fileManifest += [ordered]@{
+            relative_path = $name
+            existed = $existed
+            backup_path = $backupPath
+            original_sha256 = $originalHash
+            candidate_sha256 = Get-Sha256 $source
+        }
     }
-    $target = Join-Path $InstallRoot $name
-    Assert-UnderRoot -Path $target -Root $InstallRoot
-    $existed = Test-Path -LiteralPath $target
-    $backupPath = "runtime\$name"
-    if ($existed) {
-        New-Item -ItemType Directory -Path (Join-Path $backupRoot 'runtime') -Force | Out-Null
-        Copy-Item -LiteralPath $target -Destination (Join-Path $backupRoot $backupPath)
+
+    $resourcesTarget = Join-Path $InstallRoot 'resources'
+    $resourcesExisted = Test-Path -LiteralPath $resourcesTarget
+    $originalResourceHashes = if ($resourcesExisted) { Get-TreeHashes $resourcesTarget } else { [ordered]@{} }
+    if ($resourcesExisted) {
+        Copy-Item -LiteralPath $resourcesTarget -Destination (Join-Path $backupRoot 'resources') -Recurse
     }
-    $fileManifest += [ordered]@{ relative_path = $name; existed = $existed; backup_path = $backupPath }
-}
+    $modelExisted = Test-Path -LiteralPath $installedModel
+    $originalModelHash = if ($modelExisted) { Get-Sha256 $installedModel } else { $null }
+    if ($modelExisted) {
+        New-Item -ItemType Directory -Path (Join-Path $backupRoot 'model') -Force | Out-Null
+        Copy-Item -LiteralPath $installedModel -Destination (Join-Path $backupRoot 'model' $ModelFileName)
+    }
 
-$resourcesTarget = Join-Path $InstallRoot 'resources'
-$resourcesExisted = Test-Path -LiteralPath $resourcesTarget
-if ($resourcesExisted) {
-    Copy-Item -LiteralPath $resourcesTarget -Destination (Join-Path $backupRoot 'resources') -Recurse
-}
-$modelExisted = Test-Path -LiteralPath $installedModel
-if ($modelExisted) {
-    New-Item -ItemType Directory -Path (Join-Path $backupRoot 'model') -Force | Out-Null
-    Copy-Item -LiteralPath $installedModel -Destination (Join-Path $backupRoot 'model' $ModelFileName)
-}
+    $manifest = [ordered]@{
+        created_at = (Get-Date).ToString('o')
+        install_root = $InstallRoot
+        installed_exe_sha256 = Get-Sha256 $installedExe
+        candidate_exe_sha256 = Get-Sha256 $candidateExe
+        settings_sha256 = Get-Sha256 $settingsPath
+        files = $fileManifest
+        candidate_resource_hashes = Get-TreeHashes $candidateResources
+        original_resource_hashes = $originalResourceHashes
+        resources_existed = $resourcesExisted
+        model_relative_path = "Data\models\$ModelFileName"
+        model_existed = $modelExisted
+        original_model_sha256 = $originalModelHash
+    }
+    $manifestPath = Join-Path $backupRoot 'manifest.json'
+    $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
-$manifest = [ordered]@{
-    created_at = (Get-Date).ToString('o')
-    install_root = $InstallRoot
-    installed_exe_sha256 = Get-Sha256 $installedExe
-    candidate_exe_sha256 = Get-Sha256 $candidateExe
-    files = $fileManifest
-    resources_existed = $resourcesExisted
-    model_relative_path = "Data\models\$ModelFileName"
-    model_existed = $modelExisted
-}
-$manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $backupRoot 'manifest.json') -Encoding UTF8
+    foreach ($entry in $fileManifest) {
+        Copy-Item -LiteralPath (Join-Path $CandidateRoot $entry.relative_path) -Destination (Join-Path $InstallRoot $entry.relative_path) -Force
+        if ((Get-Sha256 (Join-Path $InstallRoot $entry.relative_path)) -ne $entry.candidate_sha256) {
+            throw "Installed runtime verification failed: $($entry.relative_path)"
+        }
+    }
+    if (Test-Path -LiteralPath $resourcesTarget) {
+        Assert-UnderRoot -Path $resourcesTarget -Root $InstallRoot
+        Remove-Item -LiteralPath $resourcesTarget -Recurse -Force
+    }
+    Copy-Item -LiteralPath $candidateResources -Destination $resourcesTarget -Recurse
+    Assert-TreeHashes -Root $resourcesTarget -Expected $manifest.candidate_resource_hashes -Label 'Installed resources'
+    Copy-Item -LiteralPath $candidateModel -Destination $installedModel -Force
 
-Stop-HandyAt $installedExe
-foreach ($name in $RuntimeFiles) {
-    Copy-Item -LiteralPath (Join-Path $CandidateRoot $name) -Destination (Join-Path $InstallRoot $name) -Force
-}
-if (Test-Path -LiteralPath $resourcesTarget) {
-    Assert-UnderRoot -Path $resourcesTarget -Root $InstallRoot
-    Remove-Item -LiteralPath $resourcesTarget -Recurse -Force
-}
-Copy-Item -LiteralPath $candidateResources -Destination $resourcesTarget -Recurse
-Copy-Item -LiteralPath $candidateModel -Destination $installedModel -Force
+    $settingsDocument = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
+    $settings = if ($settingsDocument.settings) { $settingsDocument.settings } else { $settingsDocument }
+    Set-JsonProperty -Object $settings -Name 'selected_model' -Value $ModelId
+    Set-JsonProperty -Object $settings -Name 'progressive_output_mode' -Value 'direct_prompt'
+    Set-JsonProperty -Object $settings -Name 'onboarding_completed' -Value $true
+    $settingsJson = $settingsDocument | ConvertTo-Json -Depth 100
+    $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($settingsPath, $settingsJson, $utf8WithoutBom)
 
-$settingsDocument = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
-$settings = if ($settingsDocument.settings) { $settingsDocument.settings } else { $settingsDocument }
-Set-JsonProperty -Object $settings -Name 'selected_model' -Value $ModelId
-Set-JsonProperty -Object $settings -Name 'progressive_output_mode' -Value 'direct_prompt'
-Set-JsonProperty -Object $settings -Name 'onboarding_completed' -Value $true
-Set-JsonProperty -Object $settings -Name 'diagnostic_capture_enabled' -Value $true
-$settingsJson = $settingsDocument | ConvertTo-Json -Depth 100
-$utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllText($settingsPath, $settingsJson, $utf8WithoutBom)
+    if ((Get-Sha256 $installedExe) -ne $ExpectedExeSha256.ToUpperInvariant()) { throw 'Installed executable hash verification failed.' }
+    if ((Get-Sha256 $installedModel) -ne $ModelSha256) { throw 'Installed model hash verification failed.' }
 
-if ((Get-Sha256 $installedExe) -ne $ExpectedExeSha256.ToUpperInvariant()) {
-    throw 'Installed executable hash verification failed.'
-}
-if ((Get-Sha256 $installedModel) -ne $ModelSha256) {
-    throw 'Installed model hash verification failed.'
-}
-if (-not (Test-Path -LiteralPath (Join-Path $resourcesTarget 'tray_idle.png'))) {
-    throw 'Installed resource verification failed.'
-}
-
-Start-Process -FilePath $installedExe
-Start-Sleep -Seconds 8
-$running = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $installedExe }
-if (-not $running) {
-    throw "Installed Handy did not remain running. Roll back with: $PSCommandPath -RollbackFrom '$(Join-Path $backupRoot 'manifest.json')'"
+    Start-Process -FilePath $installedExe
+    Start-Sleep -Seconds 8
+    if (-not (Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $installedExe })) {
+        throw 'Installed Handy did not remain running.'
+    }
+} catch {
+    $failure = $_
+    $manifestPath = Join-Path $backupRoot 'manifest.json'
+    if (Test-Path -LiteralPath $manifestPath) {
+        Restore-Install -ManifestPath $manifestPath
+    } elseif (Test-Path -LiteralPath $installedExe) {
+        Start-Process -FilePath $installedExe
+    }
+    throw "Installation failed and rollback was attempted: $failure"
 }
 
 Write-Output "Installed and running. Backup: $backupRoot"

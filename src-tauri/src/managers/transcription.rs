@@ -798,10 +798,10 @@ impl TranscriptionManager {
         &self,
         progressive_generation: Option<u64>,
         stable_prefix_agreement: Option<u32>,
-    ) {
+    ) -> bool {
         if self.router.is_open() || self.active_stream_worker.load(Ordering::Acquire) != 0 {
             warn!("start_stream called while a stream worker is already active");
-            return;
+            return false;
         }
         let worker_id = self.next_stream_worker_id.fetch_add(1, Ordering::Relaxed);
         if self
@@ -810,7 +810,7 @@ impl TranscriptionManager {
             .is_err()
         {
             warn!("start_stream lost a race with another stream worker");
-            return;
+            return false;
         }
         let rx = self.router.open();
         self.stream_active.store(false, Ordering::Release);
@@ -824,6 +824,7 @@ impl TranscriptionManager {
                 stable_prefix_agreement,
             )
         });
+        true
     }
 
     fn run_stream_worker(

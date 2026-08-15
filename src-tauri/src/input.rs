@@ -1,11 +1,23 @@
 use enigo::{Enigo, Key, Keyboard, Mouse, Settings};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 #[cfg(target_os = "windows")]
 use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 
 static TARGET_INTERACTION_EPOCH: AtomicU64 = AtomicU64::new(0);
+#[cfg(target_os = "windows")]
+static TARGET_INTERACTION_BARRIER: Mutex<()> = Mutex::new(());
+#[cfg(target_os = "windows")]
+static TARGET_MONITOR_STATE: AtomicU8 = AtomicU8::new(MONITOR_NOT_STARTED);
+#[cfg(target_os = "windows")]
+const MONITOR_NOT_STARTED: u8 = 0;
+#[cfg(target_os = "windows")]
+const MONITOR_STARTING: u8 = 1;
+#[cfg(target_os = "windows")]
+const MONITOR_READY: u8 = 2;
+#[cfg(target_os = "windows")]
+const MONITOR_FAILED: u8 = 3;
 
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -20,6 +32,13 @@ pub(crate) fn target_interaction_epoch() -> u64 {
     TARGET_INTERACTION_EPOCH.load(Ordering::Acquire)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum VerifiedTargetError {
+    MonitorUnavailable,
+    TargetChanged,
+    Action(String),
+}
+
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn target_mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0
@@ -28,37 +47,93 @@ unsafe extern "system" fn target_mouse_hook(code: i32, wparam: WPARAM, lparam: L
             WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
         )
     {
+        // A low-level mouse hook runs before Windows delivers the click to the
+        // target application. Sharing this barrier with prompt insertion makes
+        // the final identity check and the Enigo write indivisible with respect
+        // to a Submit click.
+        let _barrier = TARGET_INTERACTION_BARRIER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         TARGET_INTERACTION_EPOCH.fetch_add(1, Ordering::AcqRel);
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn start_target_interaction_monitor() {
+pub(crate) fn start_target_interaction_monitor() -> bool {
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
-        let _ = std::thread::Builder::new()
+        TARGET_MONITOR_STATE.store(MONITOR_STARTING, Ordering::Release);
+        let (ready_sender, ready_receiver) = std::sync::mpsc::sync_channel(1);
+        let spawn_result = std::thread::Builder::new()
             .name("target-interaction-monitor".into())
-            .spawn(|| unsafe {
+            .spawn(move || unsafe {
                 let hook = match SetWindowsHookExW(WH_MOUSE_LL, Some(target_mouse_hook), None, 0) {
                     Ok(hook) => hook,
                     Err(error) => {
                         log::error!("Failed to start target interaction monitor: {error}");
+                        let _ = ready_sender.send(Err(error.to_string()));
                         return;
                     }
                 };
+                if ready_sender.send(Ok(())).is_err() {
+                    let _ = UnhookWindowsHookEx(hook);
+                    return;
+                }
                 let mut message = MSG::default();
                 while GetMessageW(&mut message, None, 0, 0).as_bool() {}
                 let _ = UnhookWindowsHookEx(hook);
             });
+        if let Err(error) = spawn_result {
+            log::error!("Failed to spawn target interaction monitor: {error}");
+            TARGET_MONITOR_STATE.store(MONITOR_FAILED, Ordering::Release);
+            return;
+        }
+        match ready_receiver.recv_timeout(std::time::Duration::from_secs(2)) {
+            Ok(Ok(())) => TARGET_MONITOR_STATE.store(MONITOR_READY, Ordering::Release),
+            Ok(Err(error)) => {
+                log::error!("Target interaction monitor unavailable: {error}");
+                TARGET_MONITOR_STATE.store(MONITOR_FAILED, Ordering::Release);
+            }
+            Err(error) => {
+                log::error!("Timed out starting target interaction monitor: {error}");
+                TARGET_MONITOR_STATE.store(MONITOR_FAILED, Ordering::Release);
+            }
+        }
     });
+    monitor_state_is_ready(TARGET_MONITOR_STATE.load(Ordering::Acquire))
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn start_target_interaction_monitor() {}
+pub(crate) fn start_target_interaction_monitor() -> bool {
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn monitor_state_is_ready(state: u8) -> bool {
+    state == MONITOR_READY
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn target_interaction_monitor_ready() -> bool {
+    monitor_state_is_ready(TARGET_MONITOR_STATE.load(Ordering::Acquire))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn target_interaction_monitor_ready() -> bool {
+    false
+}
 
 #[cfg(target_os = "windows")]
 pub(crate) fn capture_target_identity() -> Option<crate::progressive_dictation::TargetIdentity> {
+    if !target_interaction_monitor_ready() {
+        return None;
+    }
+    capture_target_identity_unchecked()
+}
+
+#[cfg(target_os = "windows")]
+fn capture_target_identity_unchecked() -> Option<crate::progressive_dictation::TargetIdentity> {
     let foreground = unsafe { GetForegroundWindow() };
     if foreground.0.is_null() {
         return None;
@@ -85,9 +160,50 @@ pub(crate) fn capture_target_identity() -> Option<crate::progressive_dictation::
     ))
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn with_verified_target<T>(
+    expected: crate::progressive_dictation::TargetIdentity,
+    action: impl FnOnce() -> Result<T, String>,
+) -> Result<T, VerifiedTargetError> {
+    if !target_interaction_monitor_ready() {
+        return Err(VerifiedTargetError::MonitorUnavailable);
+    }
+    let _barrier = TARGET_INTERACTION_BARRIER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !capture_target_identity_unchecked().is_some_and(|current| expected.matches(current)) {
+        return Err(VerifiedTargetError::TargetChanged);
+    }
+    action().map_err(VerifiedTargetError::Action)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn with_verified_target<T>(
+    _expected: crate::progressive_dictation::TargetIdentity,
+    _action: impl FnOnce() -> Result<T, String>,
+) -> Result<T, VerifiedTargetError> {
+    Err(VerifiedTargetError::MonitorUnavailable)
+}
+
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn capture_target_identity() -> Option<crate::progressive_dictation::TargetIdentity> {
     None
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod target_monitor_tests {
+    use super::{
+        monitor_state_is_ready, MONITOR_FAILED, MONITOR_NOT_STARTED, MONITOR_READY,
+        MONITOR_STARTING,
+    };
+
+    #[test]
+    fn target_capture_is_allowed_only_after_monitor_is_ready() {
+        assert!(!monitor_state_is_ready(MONITOR_NOT_STARTED));
+        assert!(!monitor_state_is_ready(MONITOR_STARTING));
+        assert!(monitor_state_is_ready(MONITOR_READY));
+        assert!(!monitor_state_is_ready(MONITOR_FAILED));
+    }
 }
 
 /// Wrapper for Enigo to store in Tauri's managed state.
