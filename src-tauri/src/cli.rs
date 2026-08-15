@@ -57,7 +57,38 @@ pub struct CliArgs {
     #[arg(long, value_name = "N")]
     pub repeat: Option<usize>,
 
+    /// Feed --transcribe-file through the production streaming worker and
+    /// include every committed/tentative snapshot in JSON output.
+    #[arg(long, requires = "transcribe_file")]
+    pub stream_replay: bool,
+
+    /// Pace --stream-replay according to the WAV duration instead of feeding
+    /// all chunks as quickly as possible.
+    #[arg(long, requires = "stream_replay")]
+    pub realtime: bool,
+
     /// Emit --transcribe-file results as JSON.
     #[arg(long)]
     pub json: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CliArgs;
+    use clap::Parser;
+
+    #[test]
+    fn streaming_replay_cli_requires_explicit_flags() {
+        let args = CliArgs::try_parse_from([
+            "handy",
+            "--transcribe-file",
+            "saved.wav",
+            "--stream-replay",
+            "--realtime",
+        ])
+        .unwrap();
+
+        assert!(args.stream_replay);
+        assert!(args.realtime);
+    }
 }

@@ -534,6 +534,93 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
     let load_ms = load_start.elapsed().as_millis() as u64;
     let bound_backend = tm.current_backend();
 
+    if args.stream_replay {
+        let updates = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let updates_for_listener = Arc::clone(&updates);
+        let replay_started = Instant::now();
+        let listener = app.listen(
+            "stream-text-event",
+            move |event| match serde_json::from_str::<managers::transcription::StreamTextEvent>(
+                event.payload(),
+            ) {
+                Ok(snapshot) => updates_for_listener
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::json!({
+                        "elapsed_ms": replay_started.elapsed().as_millis(),
+                        "committed": snapshot.committed,
+                        "tentative": snapshot.tentative,
+                    })),
+                Err(error) => eprintln!("warning: invalid stream snapshot payload: {error}"),
+            },
+        );
+
+        tm.start_stream(None);
+        let router = tm.stream_router();
+        const CHUNK_SAMPLES: usize = 1_600;
+        for chunk in samples.chunks(CHUNK_SAMPLES) {
+            router.feed(chunk);
+            if args.realtime {
+                std::thread::sleep(std::time::Duration::from_secs_f64(
+                    chunk.len() as f64 / 16_000.0,
+                ));
+            }
+        }
+        let stop_started = Instant::now();
+        let final_text = match tm.finalize_stream() {
+            Ok(Some(text)) => text,
+            Ok(None) => {
+                app.unlisten(listener);
+                eprintln!("error: model does not provide a usable streaming transcription");
+                return 1;
+            }
+            Err(error) => {
+                app.unlisten(listener);
+                eprintln!("error: stream finalize failed: {error}");
+                return 1;
+            }
+        };
+        let stop_to_final_ms = stop_started.elapsed().as_millis() as u64;
+        app.unlisten(listener);
+        let snapshots = updates.lock().unwrap().clone();
+        let first_visible_ms = snapshots
+            .iter()
+            .find_map(|snapshot| snapshot.get("elapsed_ms").and_then(|value| value.as_u64()));
+
+        if args.json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "model": model_id,
+                    "requested_device": requested_device,
+                    "bound_backend": bound_backend,
+                    "audio_secs": audio_secs,
+                    "load_ms": load_ms,
+                    "stream_realtime": args.realtime,
+                    "stream_chunk_ms": 100,
+                    "first_visible_ms": first_visible_ms,
+                    "stop_to_final_ms": stop_to_final_ms,
+                    "stream_updates": snapshots,
+                    "text": final_text,
+                })
+            );
+        } else {
+            println!(
+                "model={} device={} backend={} audio={:.2}s load={}ms first_visible={:?}ms stop_to_final={}ms updates={}",
+                model_id,
+                requested_device,
+                bound_backend.as_deref().unwrap_or("?"),
+                audio_secs,
+                load_ms,
+                first_visible_ms,
+                stop_to_final_ms,
+                snapshots.len(),
+            );
+            println!("text: {}", final_text);
+        }
+        return 0;
+    }
+
     let runs = args.repeat.unwrap_or(1).max(1);
     let mut times_ms: Vec<u64> = Vec::new();
     let mut text = String::new();
