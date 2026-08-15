@@ -130,6 +130,16 @@ pub enum OverlayStyle {
     Live,
 }
 
+/// Where committed streaming text is displayed. The official overlay remains
+/// the upstream default; the custom direct-prompt path is explicitly selected.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressiveOutputMode {
+    #[default]
+    Overlay,
+    DirectPrompt,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelUnloadTimeout {
@@ -473,6 +483,8 @@ pub struct AppSettings {
     /// `overlay_position` (position `none` → style `None`).
     #[serde(default = "default_overlay_style")]
     pub overlay_style: OverlayStyle,
+    #[serde(default)]
+    pub progressive_output_mode: ProgressiveOutputMode,
 }
 
 fn default_model() -> String {
@@ -905,6 +917,7 @@ pub fn get_default_settings() -> AppSettings {
         extra_recording_buffer_ms: 0,
         vad_enabled: default_vad_enabled(),
         overlay_style: default_overlay_style(),
+        progressive_output_mode: ProgressiveOutputMode::default(),
     }
 }
 
@@ -1088,6 +1101,18 @@ fn apply_settings_migrations(
         } else {
             OverlayStyle::Live
         };
+        updated = true;
+    }
+
+    // Migrate the previous custom build's live progressive modes. Official
+    // stores never contain this legacy key and retain the overlay default.
+    if settings_value.get("progressive_output_mode").is_none()
+        && settings_value
+            .get("dictation_stability_mode")
+            .and_then(|value| value.as_str())
+            .is_some_and(|mode| matches!(mode, "stable_live" | "fast_live"))
+    {
+        settings.progressive_output_mode = ProgressiveOutputMode::DirectPrompt;
         updated = true;
     }
 
@@ -1368,6 +1393,46 @@ mod tests {
             settings.settings_schema_version,
             CURRENT_SETTINGS_SCHEMA_VERSION
         );
+    }
+
+    #[test]
+    fn progressive_output_mode_defaults_to_official_overlay() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({}))
+            .expect("partial settings use defaults");
+
+        assert_eq!(
+            settings.progressive_output_mode,
+            ProgressiveOutputMode::Overlay
+        );
+    }
+
+    #[test]
+    fn direct_prompt_output_mode_round_trips() {
+        let mut settings = get_default_settings();
+        settings.progressive_output_mode = ProgressiveOutputMode::DirectPrompt;
+
+        let stored = serde_json::to_value(&settings).unwrap();
+        let restored: AppSettings = serde_json::from_value(stored).unwrap();
+        assert_eq!(
+            restored.progressive_output_mode,
+            ProgressiveOutputMode::DirectPrompt
+        );
+    }
+
+    #[test]
+    fn legacy_custom_progressive_mode_migrates_to_direct_prompt() {
+        let raw = serde_json::json!({
+            "selected_model": "parakeet-v3",
+            "dictation_stability_mode": "stable_live"
+        });
+        let mut settings: AppSettings = serde_json::from_value(raw.clone()).unwrap();
+
+        assert!(apply_settings_migrations(&mut settings, &raw));
+        assert_eq!(
+            settings.progressive_output_mode,
+            ProgressiveOutputMode::DirectPrompt
+        );
+        assert_eq!(settings.selected_model, "parakeet-v3");
     }
 
     #[cfg(not(target_os = "linux"))]
