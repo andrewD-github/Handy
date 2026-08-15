@@ -71,8 +71,11 @@
 :root[data-theme="light"] {
   --color-text: var(--light-color-text);
   --color-background: var(--light-color-background);
+  --color-background-ui: var(--light-color-background-ui);
   --color-logo-primary: var(--light-color-logo-primary);
   --color-logo-stroke: var(--light-color-logo-stroke);
+  --color-text-stroke: var(--light-color-text-stroke);
+  --color-mid-gray: var(--light-color-mid-gray);
   --color-warning: var(--light-color-warning);
   --color-error: var(--light-color-error);
 }
@@ -80,8 +83,11 @@
 :root[data-theme="dark"] {
   --color-text: var(--dark-color-text);
   --color-background: var(--dark-color-background);
+  --color-background-ui: var(--dark-color-background-ui);
   --color-logo-primary: var(--dark-color-logo-primary);
   --color-logo-stroke: var(--dark-color-logo-stroke);
+  --color-text-stroke: var(--dark-color-text-stroke);
+  --color-mid-gray: var(--dark-color-mid-gray);
   --color-warning: var(--dark-color-warning);
   --color-error: var(--dark-color-error);
 }
