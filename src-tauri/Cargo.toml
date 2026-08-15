@@ -7,6 +7,11 @@ edition = "2021"
 license = "MIT"
 default-run = "handy"
 
+[features]
+# Developer-only: retain stdout/stderr in optimized replay-lab builds. Normal
+# packaged Handy builds keep the Windows GUI subsystem and show no console.
+replay-console = []
+
 [profile.dev]
 incremental = true # Compile your binary in smaller steps.
 
