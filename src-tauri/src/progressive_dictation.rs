@@ -53,7 +53,7 @@ impl TargetIdentity {
 pub(crate) enum ProgressiveSkipReason {
     Duplicate,
     StaleGeneration,
-    ContradictoryCommit,
+    ContradictoryDisplay,
     Stopped,
     TargetChanged,
     EditFailed,
@@ -110,7 +110,7 @@ impl ProgressiveSession {
             return ProgressiveDecision::Skip(ProgressiveSkipReason::Duplicate);
         }
         let Some(suffix) = snapshot.strip_prefix(&self.displayed) else {
-            return ProgressiveDecision::Skip(ProgressiveSkipReason::ContradictoryCommit);
+            return ProgressiveDecision::Skip(ProgressiveSkipReason::ContradictoryDisplay);
         };
 
         self.displayed.push_str(suffix);
@@ -668,7 +668,7 @@ mod tests {
         );
         assert_eq!(
             session.apply_snapshot(7, "hello", " different volatile words"),
-            ProgressiveDecision::Skip(ProgressiveSkipReason::ContradictoryCommit)
+            ProgressiveDecision::Skip(ProgressiveSkipReason::ContradictoryDisplay)
         );
     }
 
@@ -683,7 +683,7 @@ mod tests {
         );
         assert_eq!(
             session.apply_snapshot(7, "hullo world", ""),
-            ProgressiveDecision::Skip(ProgressiveSkipReason::ContradictoryCommit)
+            ProgressiveDecision::Skip(ProgressiveSkipReason::ContradictoryDisplay)
         );
     }
 

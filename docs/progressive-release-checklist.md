@@ -35,12 +35,13 @@ The old 0.8.3 observed p95 values were 7,402 ms first visible text, 13,792 ms
 maximum visible update gap, and 4,446 ms stop-to-final. A release candidate must
 meet all of these gates on the 17-session cohort:
 
-- [ ] p95 first committed text below 3,000 ms.
-- [ ] p95 maximum committed-text update gap below 4,000 ms.
+- [ ] p95 first visible display text below 3,000 ms.
+- [ ] p95 maximum visible display update gap below 4,000 ms.
 - [ ] p95 stop-to-final below 1,000 ms.
-- [ ] zero committed-prefix retractions.
-- [ ] zero material conflicts between accepted committed text and final text.
-- [ ] p95 final appended tail no more than 20 words.
+- [ ] zero enacted live-display retractions or backspaces.
+- [ ] no final disagreement larger than four token edits on the frozen cohort;
+      final disagreements are recorded and are not paragraph-rewritten.
+- [ ] p95 final appended/different text no more than five token edits.
 - [ ] No claim that distance to saved history measures correctness.
 - [ ] Materially different candidate/history outputs are queued for blinded
       human adjudication if an accuracy choice remains.
