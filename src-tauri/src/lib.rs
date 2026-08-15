@@ -155,6 +155,11 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // after onboarding completes. This avoids triggering permission dialogs
     // on macOS before the user is ready.
 
+    // A pointer click can submit/clear a prompt without changing Chromium's
+    // focused HWND. Track clicks so a live session never appends a late tail
+    // into the newly-cleared prompt. Mouse movement is deliberately ignored.
+    input::start_target_interaction_monitor();
+
     // Initialize the managers. The audio recorder receives the streaming router
     // explicitly, so always-on microphone startup can wire live-preview frames
     // even before Tauri state is populated.

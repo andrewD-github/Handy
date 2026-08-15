@@ -1,11 +1,61 @@
 use enigo::{Enigo, Key, Keyboard, Mouse, Settings};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+#[cfg(target_os = "windows")]
+use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 
+static TARGET_INTERACTION_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(target_os = "windows")]
+use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+    CallNextHookEx, GetForegroundWindow, GetGUIThreadInfo, GetMessageW, GetWindowThreadProcessId,
+    SetWindowsHookExW, UnhookWindowsHookEx, GUITHREADINFO, MSG, WH_MOUSE_LL, WM_LBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
 };
+
+pub(crate) fn target_interaction_epoch() -> u64 {
+    TARGET_INTERACTION_EPOCH.load(Ordering::Acquire)
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn target_mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0
+        && matches!(
+            wparam.0 as u32,
+            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+        )
+    {
+        TARGET_INTERACTION_EPOCH.fetch_add(1, Ordering::AcqRel);
+    }
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn start_target_interaction_monitor() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    STARTED.get_or_init(|| {
+        let _ = std::thread::Builder::new()
+            .name("target-interaction-monitor".into())
+            .spawn(|| unsafe {
+                let hook = match SetWindowsHookExW(WH_MOUSE_LL, Some(target_mouse_hook), None, 0) {
+                    Ok(hook) => hook,
+                    Err(error) => {
+                        log::error!("Failed to start target interaction monitor: {error}");
+                        return;
+                    }
+                };
+                let mut message = MSG::default();
+                while GetMessageW(&mut message, None, 0, 0).as_bool() {}
+                let _ = UnhookWindowsHookEx(hook);
+            });
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn start_target_interaction_monitor() {}
 
 #[cfg(target_os = "windows")]
 pub(crate) fn capture_target_identity() -> Option<crate::progressive_dictation::TargetIdentity> {
@@ -31,6 +81,7 @@ pub(crate) fn capture_target_identity() -> Option<crate::progressive_dictation::
     Some(crate::progressive_dictation::TargetIdentity::from_raw(
         foreground.0 as isize,
         info.hwndFocus.0 as isize,
+        target_interaction_epoch(),
     ))
 }
 

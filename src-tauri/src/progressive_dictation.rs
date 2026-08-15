@@ -6,13 +6,19 @@ use tauri::AppHandle;
 pub(crate) struct TargetIdentity {
     foreground_window: isize,
     focused_control: isize,
+    interaction_epoch: u64,
 }
 
 impl TargetIdentity {
-    pub(crate) fn from_raw(foreground_window: isize, focused_control: isize) -> Self {
+    pub(crate) fn from_raw(
+        foreground_window: isize,
+        focused_control: isize,
+        interaction_epoch: u64,
+    ) -> Self {
         Self {
             foreground_window,
             focused_control,
+            interaction_epoch,
         }
     }
 
@@ -25,6 +31,20 @@ impl TargetIdentity {
         Self {
             foreground_window,
             focused_control,
+            interaction_epoch: 0,
+        }
+    }
+
+    #[cfg(test)]
+    fn test_with_interaction(
+        foreground_window: isize,
+        focused_control: isize,
+        interaction_epoch: u64,
+    ) -> Self {
+        Self {
+            foreground_window,
+            focused_control,
+            interaction_epoch,
         }
     }
 }
@@ -461,6 +481,13 @@ mod tests {
         assert!(expected.matches(TargetIdentity::test(10, 20)));
         assert!(!expected.matches(TargetIdentity::test(11, 20)));
         assert!(!expected.matches(TargetIdentity::test(10, 30)));
+    }
+
+    #[test]
+    fn pointer_click_after_session_start_invalidates_the_target() {
+        let expected = TargetIdentity::test_with_interaction(10, 20, 4);
+
+        assert!(!expected.matches(TargetIdentity::test_with_interaction(10, 20, 5)));
     }
 
     #[test]
