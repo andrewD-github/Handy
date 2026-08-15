@@ -4,6 +4,7 @@ import argparse
 import json
 import platform
 import subprocess
+import tempfile
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,7 @@ def build_command(
     repeat: int = 1,
     stream_replay: bool = False,
     stable_prefix_agreement: int | None = None,
+    json_output: Path | None = None,
 ) -> list[str]:
     command = [
         str(executable),
@@ -41,6 +43,8 @@ def build_command(
         command.extend(["--stream-replay", "--realtime"])
     if stable_prefix_agreement is not None:
         command.extend(["--stable-prefix-agreement", str(stable_prefix_agreement)])
+    if json_output is not None:
+        command.extend(["--json-output", str(json_output)])
     return command
 
 
@@ -93,18 +97,22 @@ def main() -> int:
                     "status": "failed",
                 }
                 try:
-                    completed = run_json_command(
-                        build_command(
-                            args.executable,
-                            wav,
-                            model_id,
-                            args.ort_accelerator,
-                            args.repeat,
-                            args.stream_replay,
-                            args.stable_prefix_agreement,
-                        ),
-                        timeout_seconds=args.timeout,
-                    )
+                    with tempfile.TemporaryDirectory(prefix="handy-replay-") as temporary:
+                        json_output = Path(temporary) / "result.json"
+                        completed = run_json_command(
+                            build_command(
+                                args.executable,
+                                wav,
+                                model_id,
+                                args.ort_accelerator,
+                                args.repeat,
+                                args.stream_replay,
+                                args.stable_prefix_agreement,
+                                json_output,
+                            ),
+                            timeout_seconds=args.timeout,
+                            json_output=json_output,
+                        )
                     record.update(completed.result)
                     record["process_elapsed_ms"] = completed.elapsed_ms
                     record["stderr"] = completed.stderr

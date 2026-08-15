@@ -177,7 +177,10 @@ def extract_json_object(output: str) -> dict[str, object]:
 
 
 def run_json_command(
-    command: list[str], timeout_seconds: float, env: dict[str, str] | None = None
+    command: list[str],
+    timeout_seconds: float,
+    env: dict[str, str] | None = None,
+    json_output: Path | None = None,
 ) -> JsonCommandResult:
     started = time.perf_counter()
     completed = subprocess.run(
@@ -191,8 +194,9 @@ def run_json_command(
         env=env,
     )
     elapsed_ms = (time.perf_counter() - started) * 1000
+    json_source = json_output.read_text(encoding="utf-8") if json_output else completed.stdout
     return JsonCommandResult(
-        result=extract_json_object(completed.stdout),
+        result=extract_json_object(json_source),
         stdout=completed.stdout,
         stderr=completed.stderr,
         elapsed_ms=elapsed_ms,

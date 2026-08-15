@@ -439,12 +439,9 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
         let model_manager = app.state::<Arc<ModelManager>>();
         let models = model_manager.get_available_models();
         if args.json {
-            match serde_json::to_string_pretty(&models) {
-                Ok(s) => println!("{}", s),
-                Err(e) => {
-                    eprintln!("error: failed to serialize models: {}", e);
-                    return 1;
-                }
+            if let Err(error) = emit_headless_json(args, &models) {
+                eprintln!("error: failed to emit models: {error}");
+                return 1;
             }
         } else if models.is_empty() {
             println!("No models available.");
@@ -593,23 +590,24 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
             .find_map(|snapshot| snapshot.get("elapsed_ms").and_then(|value| value.as_u64()));
 
         if args.json {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "model": model_id,
-                    "requested_device": requested_device,
-                    "bound_backend": bound_backend,
-                    "audio_secs": audio_secs,
-                    "load_ms": load_ms,
-                    "stream_realtime": args.realtime,
-                    "stream_chunk_ms": 100,
-                    "stable_prefix_agreement": args.stable_prefix_agreement,
-                    "first_visible_ms": first_visible_ms,
-                    "stop_to_final_ms": stop_to_final_ms,
-                    "stream_updates": snapshots,
-                    "text": final_text,
-                })
-            );
+            let result = serde_json::json!({
+                "model": model_id,
+                "requested_device": requested_device,
+                "bound_backend": bound_backend,
+                "audio_secs": audio_secs,
+                "load_ms": load_ms,
+                "stream_realtime": args.realtime,
+                "stream_chunk_ms": 100,
+                "stable_prefix_agreement": args.stable_prefix_agreement,
+                "first_visible_ms": first_visible_ms,
+                "stop_to_final_ms": stop_to_final_ms,
+                "stream_updates": snapshots,
+                "text": final_text,
+            });
+            if let Err(error) = emit_headless_json(args, &result) {
+                eprintln!("error: failed to emit replay result: {error}");
+                return 1;
+            }
         } else {
             println!(
                 "model={} device={} backend={} audio={:.2}s load={}ms first_visible={:?}ms stop_to_final={}ms updates={}",
@@ -658,20 +656,21 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
     };
 
     if args.json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "model": model_id,
-                "requested_device": requested_device,
-                "bound_backend": bound_backend,
-                "audio_secs": audio_secs,
-                "load_ms": load_ms,
-                "transcribe_ms": times_ms,
-                "best_ms": best_ms,
-                "rtf": rtf,
-                "text": text,
-            })
-        );
+        let result = serde_json::json!({
+            "model": model_id,
+            "requested_device": requested_device,
+            "bound_backend": bound_backend,
+            "audio_secs": audio_secs,
+            "load_ms": load_ms,
+            "transcribe_ms": times_ms,
+            "best_ms": best_ms,
+            "rtf": rtf,
+            "text": text,
+        });
+        if let Err(error) = emit_headless_json(args, &result) {
+            eprintln!("error: failed to emit transcription result: {error}");
+            return 1;
+        }
     } else {
         println!(
             "model={} device={} backend={} audio={:.2}s load={}ms best={}ms rtf={:.2}x",
@@ -686,6 +685,18 @@ fn run_headless_transcription(app: &AppHandle, args: &CliArgs) -> i32 {
         println!("text: {}", text);
     }
     0
+}
+
+fn emit_headless_json(args: &CliArgs, value: &impl serde::Serialize) -> Result<(), String> {
+    let serialized = serde_json::to_string(value)
+        .map_err(|error| format!("could not serialize JSON: {error}"))?;
+    if let Some(path) = &args.json_output {
+        std::fs::write(path, format!("{serialized}\n"))
+            .map_err(|error| format!("could not write {}: {error}", path.display()))
+    } else {
+        println!("{serialized}");
+        Ok(())
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

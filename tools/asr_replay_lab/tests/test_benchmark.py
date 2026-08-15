@@ -54,3 +54,15 @@ def test_build_command_passes_stable_prefix_agreement() -> None:
 
     index = command.index("--stable-prefix-agreement")
     assert command[index + 1] == "2"
+
+
+def test_build_command_can_write_json_from_normal_gui_binary() -> None:
+    command = build_command(
+        Path("handy.exe"),
+        Path("audio.wav"),
+        "streaming-model",
+        stream_replay=True,
+        json_output=Path("result.json"),
+    )
+
+    assert command[-2:] == ["--json-output", "result.json"]

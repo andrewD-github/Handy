@@ -157,6 +157,7 @@ impl ProgressiveSession {
 pub(crate) enum PromptEditError {
     TargetChanged,
     EditFailed,
+    PartialEdit,
 }
 
 pub(crate) trait PromptEditor {
@@ -184,20 +185,23 @@ impl PromptEditor for RuntimePromptEditor {
         text: &str,
     ) -> Result<(), PromptEditError> {
         let (sender, receiver) = std::sync::mpsc::channel();
-        let app = self.app.clone();
         let insertion = text.to_string();
         self.app
             .run_on_main_thread(move || {
-                let result = crate::input::with_verified_target(expected_target, || {
-                    crate::clipboard::insert_progressive_text(&insertion, &app)
-                })
-                .map_err(|error| match error {
-                    crate::input::VerifiedTargetError::TargetChanged
-                    | crate::input::VerifiedTargetError::MonitorUnavailable => {
-                        PromptEditError::TargetChanged
-                    }
-                    crate::input::VerifiedTargetError::Action(_) => PromptEditError::EditFailed,
-                });
+                let result =
+                    crate::input::insert_text_at_verified_target(expected_target, &insertion)
+                        .map_err(|error| match error {
+                            crate::input::VerifiedTargetError::TargetChanged
+                            | crate::input::VerifiedTargetError::MonitorUnavailable => {
+                                PromptEditError::TargetChanged
+                            }
+                            crate::input::VerifiedTargetError::Action(_) => {
+                                PromptEditError::EditFailed
+                            }
+                            crate::input::VerifiedTargetError::PartialAction(_) => {
+                                PromptEditError::PartialEdit
+                            }
+                        });
                 let _ = sender.send(result);
             })
             .map_err(|_| PromptEditError::EditFailed)?;
@@ -253,6 +257,11 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
                 session.cancel();
                 return ProgressiveDecision::Skip(ProgressiveSkipReason::EditFailed);
             }
+            Err(PromptEditError::PartialEdit) => {
+                session.cancel();
+                self.inserted_any = true;
+                return ProgressiveDecision::Skip(ProgressiveSkipReason::EditFailed);
+            }
         }
 
         decision
@@ -292,6 +301,13 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
                 return ProgressiveCompletion {
                     decision: ProgressiveDecision::Skip(ProgressiveSkipReason::EditFailed),
                     owns_output: self.inserted_any,
+                };
+            }
+            Err(PromptEditError::PartialEdit) => {
+                self.inserted_any = true;
+                return ProgressiveCompletion {
+                    decision: ProgressiveDecision::Skip(ProgressiveSkipReason::EditFailed),
+                    owns_output: true,
                 };
             }
         }
@@ -473,6 +489,7 @@ mod tests {
         current_target: Mutex<Option<TargetIdentity>>,
         target_on_next_append: Mutex<Option<TargetIdentity>>,
         fail_next_append: Mutex<bool>,
+        partially_fail_next_append: Mutex<bool>,
         inserts: Mutex<Vec<String>>,
     }
 
@@ -482,6 +499,7 @@ mod tests {
                 current_target: Mutex::new(Some(target)),
                 target_on_next_append: Mutex::new(None),
                 fail_next_append: Mutex::new(false),
+                partially_fail_next_append: Mutex::new(false),
                 inserts: Mutex::new(Vec::new()),
             }
         }
@@ -500,6 +518,10 @@ mod tests {
 
         fn fail_next_append(&self) {
             *self.fail_next_append.lock().unwrap() = true;
+        }
+
+        fn partially_fail_next_append(&self) {
+            *self.partially_fail_next_append.lock().unwrap() = true;
         }
     }
 
@@ -522,6 +544,9 @@ mod tests {
             }
             if std::mem::take(&mut *self.fail_next_append.lock().unwrap()) {
                 return Err(PromptEditError::EditFailed);
+            }
+            if std::mem::take(&mut *self.partially_fail_next_append.lock().unwrap()) {
+                return Err(PromptEditError::PartialEdit);
             }
             self.inserts.lock().unwrap().push(text.to_string());
             Ok(())
@@ -623,6 +648,27 @@ mod tests {
             ProgressiveCompletion {
                 decision: ProgressiveDecision::Skip(ProgressiveSkipReason::Stopped),
                 owns_output: false,
+            }
+        );
+    }
+
+    #[test]
+    fn partially_inserted_first_edit_blocks_full_final_fallback() {
+        let target = TargetIdentity::test(10, 20);
+        let editor = Arc::new(FakeEditor::new(target));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, target);
+        editor.partially_fail_next_append();
+
+        assert_eq!(
+            coordinator.apply_snapshot(7, "hello", ""),
+            ProgressiveDecision::Skip(ProgressiveSkipReason::EditFailed)
+        );
+        assert_eq!(
+            coordinator.finish(7, "hello"),
+            ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::Stopped),
+                owns_output: true,
             }
         );
     }

@@ -22,6 +22,10 @@ const MONITOR_FAILED: u8 = 3;
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 #[cfg(target_os = "windows")]
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+};
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, GetGUIThreadInfo, GetMessageW, GetWindowThreadProcessId,
     SetWindowsHookExW, UnhookWindowsHookEx, GUITHREADINFO, MSG, WH_MOUSE_LL, WM_LBUTTONDOWN,
@@ -37,6 +41,7 @@ pub(crate) enum VerifiedTargetError {
     MonitorUnavailable,
     TargetChanged,
     Action(String),
+    PartialAction(String),
 }
 
 #[cfg(target_os = "windows")]
@@ -47,16 +52,26 @@ unsafe extern "system" fn target_mouse_hook(code: i32, wparam: WPARAM, lparam: L
             WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
         )
     {
-        // A low-level mouse hook runs before Windows delivers the click to the
-        // target application. Sharing this barrier with prompt insertion makes
-        // the final identity check and the Enigo write indivisible with respect
-        // to a Submit click.
-        let _barrier = TARGET_INTERACTION_BARRIER
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        TARGET_INTERACTION_EPOCH.fetch_add(1, Ordering::AcqRel);
+        // The matching insertion critical section contains only a foreground
+        // identity read and one SendInput submission. It never contains text
+        // generation, clipboard work, delivery waits, or sleeps, keeping this
+        // hook wait bounded far below LowLevelHooksTimeout.
+        {
+            let _barrier = TARGET_INTERACTION_BARRIER
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            TARGET_INTERACTION_EPOCH.fetch_add(1, Ordering::AcqRel);
+        }
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+#[cfg(target_os = "windows")]
+fn mark_target_monitor_failed() {
+    let _barrier = TARGET_INTERACTION_BARRIER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    TARGET_MONITOR_STATE.store(MONITOR_FAILED, Ordering::Release);
 }
 
 #[cfg(target_os = "windows")]
@@ -77,27 +92,48 @@ pub(crate) fn start_target_interaction_monitor() -> bool {
                     }
                 };
                 if ready_sender.send(Ok(())).is_err() {
+                    mark_target_monitor_failed();
                     let _ = UnhookWindowsHookEx(hook);
                     return;
                 }
                 let mut message = MSG::default();
-                while GetMessageW(&mut message, None, 0, 0).as_bool() {}
+                loop {
+                    let status = GetMessageW(&mut message, None, 0, 0).0;
+                    if status > 0 {
+                        continue;
+                    }
+                    if status < 0 {
+                        log::error!(
+                            "Target interaction monitor message loop failed: {}",
+                            windows::core::Error::from_win32()
+                        );
+                    }
+                    break;
+                }
+                mark_target_monitor_failed();
                 let _ = UnhookWindowsHookEx(hook);
             });
         if let Err(error) = spawn_result {
             log::error!("Failed to spawn target interaction monitor: {error}");
-            TARGET_MONITOR_STATE.store(MONITOR_FAILED, Ordering::Release);
+            mark_target_monitor_failed();
             return;
         }
         match ready_receiver.recv_timeout(std::time::Duration::from_secs(2)) {
-            Ok(Ok(())) => TARGET_MONITOR_STATE.store(MONITOR_READY, Ordering::Release),
+            Ok(Ok(())) => {
+                let _ = TARGET_MONITOR_STATE.compare_exchange(
+                    MONITOR_STARTING,
+                    MONITOR_READY,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+            }
             Ok(Err(error)) => {
                 log::error!("Target interaction monitor unavailable: {error}");
-                TARGET_MONITOR_STATE.store(MONITOR_FAILED, Ordering::Release);
+                mark_target_monitor_failed();
             }
             Err(error) => {
                 log::error!("Timed out starting target interaction monitor: {error}");
-                TARGET_MONITOR_STATE.store(MONITOR_FAILED, Ordering::Release);
+                mark_target_monitor_failed();
             }
         }
     });
@@ -161,28 +197,83 @@ fn capture_target_identity_unchecked() -> Option<crate::progressive_dictation::T
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn with_verified_target<T>(
+pub(crate) fn insert_text_at_verified_target(
     expected: crate::progressive_dictation::TargetIdentity,
-    action: impl FnOnce() -> Result<T, String>,
-) -> Result<T, VerifiedTargetError> {
-    if !target_interaction_monitor_ready() {
-        return Err(VerifiedTargetError::MonitorUnavailable);
-    }
+    text: &str,
+) -> Result<(), VerifiedTargetError> {
+    let inputs = unicode_input_batch(text);
     let _barrier = TARGET_INTERACTION_BARRIER
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !target_interaction_monitor_ready() {
+        return Err(VerifiedTargetError::MonitorUnavailable);
+    }
     if !capture_target_identity_unchecked().is_some_and(|current| expected.matches(current)) {
         return Err(VerifiedTargetError::TargetChanged);
     }
-    action().map_err(VerifiedTargetError::Action)
+    send_unicode_input_batch(&inputs)
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn with_verified_target<T>(
+pub(crate) fn insert_text_at_verified_target(
     _expected: crate::progressive_dictation::TargetIdentity,
-    _action: impl FnOnce() -> Result<T, String>,
-) -> Result<T, VerifiedTargetError> {
+    _text: &str,
+) -> Result<(), VerifiedTargetError> {
     Err(VerifiedTargetError::MonitorUnavailable)
+}
+
+#[cfg(target_os = "windows")]
+fn unicode_input_batch(text: &str) -> Vec<INPUT> {
+    text.encode_utf16()
+        .flat_map(|unit| {
+            [
+                INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: Default::default(),
+                            wScan: unit,
+                            dwFlags: KEYEVENTF_UNICODE,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                },
+                INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: Default::default(),
+                            wScan: unit,
+                            dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                },
+            ]
+        })
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn send_unicode_input_batch(inputs: &[INPUT]) -> Result<(), VerifiedTargetError> {
+    if inputs.is_empty() {
+        return Ok(());
+    }
+    let inserted = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
+    if inserted == inputs.len() as u32 {
+        return Ok(());
+    }
+    let message = format!(
+        "SendInput inserted {inserted} of {} Unicode keyboard events",
+        inputs.len()
+    );
+    if inserted == 0 {
+        Err(VerifiedTargetError::Action(message))
+    } else {
+        Err(VerifiedTargetError::PartialAction(message))
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -203,6 +294,24 @@ mod target_monitor_tests {
         assert!(!monitor_state_is_ready(MONITOR_STARTING));
         assert!(monitor_state_is_ready(MONITOR_READY));
         assert!(!monitor_state_is_ready(MONITOR_FAILED));
+    }
+
+    #[test]
+    fn unicode_batch_has_key_down_and_up_for_every_utf16_unit() {
+        let inputs = super::unicode_input_batch("A🙂");
+        assert_eq!(inputs.len(), 6);
+        for pair in inputs.chunks_exact(2) {
+            assert_eq!(pair[0].r#type, super::INPUT_KEYBOARD);
+            assert_eq!(pair[1].r#type, super::INPUT_KEYBOARD);
+            let down = unsafe { pair[0].Anonymous.ki };
+            let up = unsafe { pair[1].Anonymous.ki };
+            assert_eq!(down.dwFlags, super::KEYEVENTF_UNICODE);
+            assert_eq!(
+                up.dwFlags,
+                super::KEYEVENTF_UNICODE | super::KEYEVENTF_KEYUP
+            );
+            assert_eq!(down.wScan, up.wScan);
+        }
     }
 }
 

@@ -75,12 +75,18 @@ pub struct CliArgs {
     /// Emit --transcribe-file results as JSON.
     #[arg(long)]
     pub json: bool,
+
+    /// Write JSON output to a file. This keeps replay automation available in
+    /// the normal Windows GUI build, where stdout is intentionally detached.
+    #[arg(long, value_name = "FILE", requires = "json")]
+    pub json_output: Option<PathBuf>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::CliArgs;
     use clap::Parser;
+    use std::path::PathBuf;
 
     #[test]
     fn streaming_replay_cli_requires_explicit_flags() {
@@ -110,5 +116,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(args.stable_prefix_agreement, Some(2));
+    }
+
+    #[test]
+    fn json_output_requires_json_mode() {
+        assert!(CliArgs::try_parse_from(["handy", "--json-output", "result.json"]).is_err());
+        let args = CliArgs::try_parse_from([
+            "handy",
+            "--transcribe-file",
+            "saved.wav",
+            "--json",
+            "--json-output",
+            "result.json",
+        ])
+        .unwrap();
+        assert_eq!(args.json_output, Some(PathBuf::from("result.json")));
     }
 }

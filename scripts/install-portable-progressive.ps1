@@ -13,7 +13,10 @@ param(
     [switch]$Install,
 
     [Parameter(Mandatory, ParameterSetName = 'Rollback')]
-    [string]$RollbackFrom
+    [string]$RollbackFrom,
+
+    [Parameter(Mandatory, ParameterSetName = 'ValidateRollback')]
+    [string]$ValidateRollbackFrom
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,6 +89,89 @@ function Set-JsonProperty([object]$Object, [string]$Name, [object]$Value) {
     }
 }
 
+function Get-OptionalProperty([object]$Object, [string]$Name) {
+    if ($Object.PSObject.Properties.Name -contains $Name) {
+        $value = $Object.$Name
+        if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
+            return $value
+        }
+    }
+    return $null
+}
+
+function Get-RollbackPlan([string]$ManifestPath) {
+    $resolvedManifest = (Resolve-Path -LiteralPath $ManifestPath).Path
+    $backupRoot = Split-Path -Parent $resolvedManifest
+    $manifest = Get-Content -Raw -LiteralPath $resolvedManifest | ConvertFrom-Json
+    $targetRoot = [System.IO.Path]::GetFullPath([string]$manifest.install_root)
+    Assert-UnderRoot -Path (Join-Path $targetRoot 'handy.exe') -Root $targetRoot
+
+    # Resolve and hash every backup input before stopping Handy or touching the
+    # installation. Schema 1 manifests did not store hashes, so their immutable
+    # backup files become the expected source of truth.
+    $runtimeHashes = @{}
+    foreach ($entry in $manifest.files) {
+        if (-not [bool]$entry.existed) { continue }
+        $backup = Join-Path $backupRoot ([string]$entry.backup_path)
+        if (-not (Test-Path -LiteralPath $backup -PathType Leaf)) {
+            throw "Rollback runtime backup is missing: $($entry.relative_path)"
+        }
+        $recorded = Get-OptionalProperty -Object $entry -Name 'original_sha256'
+        $backupHash = Get-Sha256 $backup
+        if ($recorded -and $backupHash -ne [string]$recorded) {
+            throw "Rollback runtime backup hash is invalid: $($entry.relative_path)"
+        }
+        $runtimeHashes[[string]$entry.relative_path] = $backupHash
+    }
+
+    $resourceHashes = $null
+    if ([bool]$manifest.resources_existed) {
+        $resourceBackup = Join-Path $backupRoot 'resources'
+        if (-not (Test-Path -LiteralPath $resourceBackup -PathType Container)) {
+            throw 'Rollback resources backup is missing.'
+        }
+        $recorded = Get-OptionalProperty -Object $manifest -Name 'original_resource_hashes'
+        if ($recorded) {
+            Assert-TreeHashes -Root $resourceBackup -Expected $recorded -Label 'Rollback resources backup'
+        }
+        $resourceHashes = Get-TreeHashes $resourceBackup
+    }
+
+    $modelHash = $null
+    if ([bool]$manifest.model_existed) {
+        $modelBackup = Join-Path $backupRoot 'model' $ModelFileName
+        if (-not (Test-Path -LiteralPath $modelBackup -PathType Leaf)) {
+            throw 'Rollback model backup is missing.'
+        }
+        $recorded = Get-OptionalProperty -Object $manifest -Name 'original_model_sha256'
+        $modelHash = Get-Sha256 $modelBackup
+        if ($recorded -and $modelHash -ne [string]$recorded) {
+            throw 'Rollback model backup hash is invalid.'
+        }
+    }
+
+    $settingsBackup = Join-Path $backupRoot 'settings_store.json'
+    if (-not (Test-Path -LiteralPath $settingsBackup -PathType Leaf)) {
+        throw 'Rollback settings backup is missing.'
+    }
+    $recordedSettings = Get-OptionalProperty -Object $manifest -Name 'settings_sha256'
+    $settingsHash = Get-Sha256 $settingsBackup
+    if ($recordedSettings -and $settingsHash -ne [string]$recordedSettings) {
+        throw 'Rollback settings backup hash is invalid.'
+    }
+
+    [pscustomobject]@{
+        ManifestPath = $resolvedManifest
+        BackupRoot = $backupRoot
+        Manifest = $manifest
+        TargetRoot = $targetRoot
+        RuntimeHashes = $runtimeHashes
+        ResourceHashes = $resourceHashes
+        ModelHash = $modelHash
+        SettingsHash = $settingsHash
+    }
+}
+
 function Stop-HandyAt([string]$ExecutablePath) {
     $fullPath = [System.IO.Path]::GetFullPath($ExecutablePath)
     $processes = Get-CimInstance Win32_Process |
@@ -97,11 +183,10 @@ function Stop-HandyAt([string]$ExecutablePath) {
 }
 
 function Restore-Install([string]$ManifestPath) {
-    $manifestPath = (Resolve-Path -LiteralPath $ManifestPath).Path
-    $backupRoot = Split-Path -Parent $manifestPath
-    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-    $targetRoot = [System.IO.Path]::GetFullPath([string]$manifest.install_root)
-    Assert-UnderRoot -Path (Join-Path $targetRoot 'handy.exe') -Root $targetRoot
+    $plan = Get-RollbackPlan -ManifestPath $ManifestPath
+    $backupRoot = $plan.BackupRoot
+    $manifest = $plan.Manifest
+    $targetRoot = $plan.TargetRoot
     Stop-HandyAt (Join-Path $targetRoot 'handy.exe')
 
     foreach ($entry in $manifest.files) {
@@ -109,7 +194,7 @@ function Restore-Install([string]$ManifestPath) {
         Assert-UnderRoot -Path $target -Root $targetRoot
         if ([bool]$entry.existed) {
             Copy-Item -LiteralPath (Join-Path $backupRoot ([string]$entry.backup_path)) -Destination $target -Force
-            if ((Get-Sha256 $target) -ne [string]$entry.original_sha256) {
+            if ((Get-Sha256 $target) -ne [string]$plan.RuntimeHashes[[string]$entry.relative_path]) {
                 throw "Rollback runtime verification failed: $($entry.relative_path)"
             }
         } elseif (Test-Path -LiteralPath $target) {
@@ -124,14 +209,14 @@ function Restore-Install([string]$ManifestPath) {
     }
     if ([bool]$manifest.resources_existed) {
         Copy-Item -LiteralPath (Join-Path $backupRoot 'resources') -Destination $resources -Recurse
-        Assert-TreeHashes -Root $resources -Expected $manifest.original_resource_hashes -Label 'Rollback resources'
+        Assert-TreeHashes -Root $resources -Expected $plan.ResourceHashes -Label 'Rollback resources'
     }
 
     $modelTarget = Join-Path $targetRoot ([string]$manifest.model_relative_path)
     Assert-UnderRoot -Path $modelTarget -Root $targetRoot
     if ([bool]$manifest.model_existed) {
         Copy-Item -LiteralPath (Join-Path $backupRoot 'model' $ModelFileName) -Destination $modelTarget -Force
-        if ((Get-Sha256 $modelTarget) -ne [string]$manifest.original_model_sha256) {
+        if ((Get-Sha256 $modelTarget) -ne [string]$plan.ModelHash) {
             throw 'Rollback model verification failed.'
         }
     } elseif (Test-Path -LiteralPath $modelTarget) {
@@ -139,7 +224,7 @@ function Restore-Install([string]$ManifestPath) {
     }
 
     Copy-Item -LiteralPath (Join-Path $backupRoot 'settings_store.json') -Destination (Join-Path $targetRoot 'Data\settings_store.json') -Force
-    if ((Get-Sha256 (Join-Path $targetRoot 'Data\settings_store.json')) -ne [string]$manifest.settings_sha256) {
+    if ((Get-Sha256 (Join-Path $targetRoot 'Data\settings_store.json')) -ne [string]$plan.SettingsHash) {
         throw 'Rollback settings verification failed.'
     }
     Start-Process -FilePath (Join-Path $targetRoot 'handy.exe')
@@ -148,6 +233,12 @@ function Restore-Install([string]$ManifestPath) {
 
 if ($PSCmdlet.ParameterSetName -eq 'Rollback') {
     Restore-Install -ManifestPath $RollbackFrom
+    exit 0
+}
+
+if ($PSCmdlet.ParameterSetName -eq 'ValidateRollback') {
+    $plan = Get-RollbackPlan -ManifestPath $ValidateRollbackFrom
+    Write-Output "Rollback backup is complete and verifiable: $($plan.BackupRoot)"
     exit 0
 }
 
@@ -223,6 +314,7 @@ try {
     }
 
     $manifest = [ordered]@{
+        schema_version = 2
         created_at = (Get-Date).ToString('o')
         install_root = $InstallRoot
         installed_exe_sha256 = Get-Sha256 $installedExe
