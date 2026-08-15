@@ -28,14 +28,27 @@ def edit_distance(left: list[str] | str, right: list[str] | str) -> int:
 
 def analyze_stream_row(row: dict[str, object]) -> dict[str, object]:
     typed = ""
+    previous_raw = ""
     accepted_times: list[float] = []
     violations = 0
+    raw_backspaces_total = 0
+    raw_backspaces_max = 0
     for update in row.get("stream_updates", []):
-        committed = str(update.get("committed", ""))
-        if committed == typed:
+        display = str(update.get("committed", "")) + str(update.get("tentative", ""))
+        common = 0
+        for left, right in zip(previous_raw, display):
+            if left != right:
+                break
+            common += 1
+        backspaces = len(previous_raw) - common
+        raw_backspaces_total += backspaces
+        raw_backspaces_max = max(raw_backspaces_max, backspaces)
+        previous_raw = display
+
+        if display == typed:
             continue
-        if committed.startswith(typed):
-            typed = committed
+        if display.startswith(typed):
+            typed = display
             accepted_times.append(float(update["elapsed_ms"]))
         else:
             violations += 1
@@ -54,7 +67,9 @@ def analyze_stream_row(row: dict[str, object]) -> dict[str, object]:
         "first_visible_ms": accepted_times[0] if accepted_times else None,
         "max_update_gap_ms": max(gaps) if gaps else None,
         "accepted_updates": len(accepted_times),
-        "committed_prefix_violations": violations,
+        "visible_prefix_violations": violations,
+        "raw_display_backspaces_total": raw_backspaces_total,
+        "raw_display_backspaces_max": raw_backspaces_max,
         "typed_text": typed,
         "final_relation": relation,
         "final_tail_chars": len(final) - len(typed) if final.startswith(typed) else None,
@@ -123,8 +138,15 @@ def main() -> int:
                 "stop_to_final_ms": optional_summary(
                     [float(metric["stop_to_final_ms"]) for metric in metrics]
                 ),
-                "committed_prefix_violations": sum(
-                    int(metric["committed_prefix_violations"]) for metric in metrics
+                "visible_prefix_violations": sum(
+                    int(metric["visible_prefix_violations"]) for metric in metrics
+                ),
+                "raw_display_backspaces_total": sum(
+                    int(metric["raw_display_backspaces_total"]) for metric in metrics
+                ),
+                "raw_display_backspaces_max": max(
+                    (int(metric["raw_display_backspaces_max"]) for metric in metrics),
+                    default=0,
                 ),
                 "material_final_conflicts": sum(
                     metric["final_relation"] == "material_conflict" for metric in metrics
@@ -144,7 +166,7 @@ def main() -> int:
     report = {
         "ground_truth_status": "none_for_actual_usage",
         "accuracy_warning": "History agreement is an observed-output proxy, not WER or CER.",
-        "direct_prompt_policy": "Only append a growing committed prefix; tentative text is never typed.",
+        "direct_prompt_policy": "Append committed plus tentative display text only while it grows from the already typed prefix; never backspace a retraction.",
         "run_rows": len(rows),
         "models": models,
         "failures": [

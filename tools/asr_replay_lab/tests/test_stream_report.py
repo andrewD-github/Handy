@@ -15,7 +15,7 @@ def test_analyze_stream_row_reports_append_only_commits_and_final_tail() -> None
 
     assert metrics["first_visible_ms"] == 400
     assert metrics["max_update_gap_ms"] == 300
-    assert metrics["committed_prefix_violations"] == 0
+    assert metrics["visible_prefix_violations"] == 0
     assert metrics["final_relation"] == "extension"
     assert metrics["final_tail_chars"] == 1
 
@@ -32,6 +32,6 @@ def test_analyze_stream_row_detects_committed_retraction_and_material_final_conf
 
     metrics = analyze_stream_row(row)
 
-    assert metrics["committed_prefix_violations"] == 1
+    assert metrics["visible_prefix_violations"] == 1
     assert metrics["final_relation"] == "material_conflict"
     assert metrics["final_repair_chars"] > 0

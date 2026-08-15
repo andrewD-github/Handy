@@ -64,7 +64,7 @@ pub(crate) enum ProgressiveDecision {
     Append(String),
     Skip(ProgressiveSkipReason),
     FinalConflict {
-        committed: String,
+        displayed: String,
         final_text: String,
     },
 }
@@ -79,7 +79,7 @@ pub(crate) struct ProgressiveSession {
     generation: u64,
     #[allow(dead_code)]
     target: TargetIdentity,
-    committed: String,
+    displayed: String,
     stopped: bool,
 }
 
@@ -88,7 +88,7 @@ impl ProgressiveSession {
         Self {
             generation,
             target,
-            committed: String::new(),
+            displayed: String::new(),
             stopped: false,
         }
     }
@@ -97,7 +97,7 @@ impl ProgressiveSession {
         &mut self,
         generation: u64,
         committed: &str,
-        _tentative: &str,
+        tentative: &str,
     ) -> ProgressiveDecision {
         if self.stopped {
             return ProgressiveDecision::Skip(ProgressiveSkipReason::Stopped);
@@ -105,14 +105,15 @@ impl ProgressiveSession {
         if generation != self.generation {
             return ProgressiveDecision::Skip(ProgressiveSkipReason::StaleGeneration);
         }
-        if committed == self.committed {
+        let snapshot = format!("{committed}{tentative}");
+        if snapshot == self.displayed {
             return ProgressiveDecision::Skip(ProgressiveSkipReason::Duplicate);
         }
-        let Some(suffix) = committed.strip_prefix(&self.committed) else {
+        let Some(suffix) = snapshot.strip_prefix(&self.displayed) else {
             return ProgressiveDecision::Skip(ProgressiveSkipReason::ContradictoryCommit);
         };
 
-        self.committed.push_str(suffix);
+        self.displayed.push_str(suffix);
         ProgressiveDecision::Append(suffix.to_string())
     }
 
@@ -125,16 +126,16 @@ impl ProgressiveSession {
         }
 
         self.stopped = true;
-        if final_text == self.committed {
+        if final_text == self.displayed {
             return ProgressiveDecision::Skip(ProgressiveSkipReason::Duplicate);
         }
-        if let Some(suffix) = final_text.strip_prefix(&self.committed) {
-            self.committed.push_str(suffix);
+        if let Some(suffix) = final_text.strip_prefix(&self.displayed) {
+            self.displayed.push_str(suffix);
             return ProgressiveDecision::Append(suffix.to_string());
         }
 
         ProgressiveDecision::FinalConflict {
-            committed: self.committed.clone(),
+            displayed: self.displayed.clone(),
             final_text: final_text.to_string(),
         }
     }
@@ -642,32 +643,32 @@ mod tests {
 
         assert_eq!(
             session.apply_snapshot(7, "hello", " wor"),
-            ProgressiveDecision::Append("hello".into())
+            ProgressiveDecision::Append("hello wor".into())
         );
     }
 
     #[test]
     fn growing_committed_snapshot_appends_only_suffix() {
         let mut session = ProgressiveSession::start(7, TargetIdentity::test(10, 20));
-        session.apply_snapshot(7, "hello", "");
+        session.apply_snapshot(7, "hello", " wor");
 
         assert_eq!(
             session.apply_snapshot(7, "hello world", ""),
-            ProgressiveDecision::Append(" world".into())
+            ProgressiveDecision::Append("ld".into())
         );
     }
 
     #[test]
-    fn tentative_text_is_never_returned_as_a_prompt_edit() {
+    fn growing_tentative_text_is_appended_but_a_retraction_is_never_typed() {
         let mut session = ProgressiveSession::start(7, TargetIdentity::test(10, 20));
 
         assert_eq!(
             session.apply_snapshot(7, "hello", " volatile words"),
-            ProgressiveDecision::Append("hello".into())
+            ProgressiveDecision::Append("hello volatile words".into())
         );
         assert_eq!(
             session.apply_snapshot(7, "hello", " different volatile words"),
-            ProgressiveDecision::Skip(ProgressiveSkipReason::Duplicate)
+            ProgressiveDecision::Skip(ProgressiveSkipReason::ContradictoryCommit)
         );
     }
 
@@ -700,7 +701,7 @@ mod tests {
         assert_eq!(
             conflict.finish(8, "hullo"),
             ProgressiveDecision::FinalConflict {
-                committed: "hello".into(),
+                displayed: "hello".into(),
                 final_text: "hullo".into(),
             }
         );
