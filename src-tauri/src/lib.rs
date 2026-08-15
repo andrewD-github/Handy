@@ -15,6 +15,7 @@ mod managers;
 mod memory;
 mod overlay;
 mod paste_tx;
+mod progressive_dictation;
 pub mod portable;
 mod secure_input;
 mod settings;
