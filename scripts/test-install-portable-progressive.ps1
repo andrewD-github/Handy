@@ -7,9 +7,11 @@ $install = Join-Path $root 'install'
 try {
     New-Item -ItemType Directory -Path (Join-Path $backup 'runtime') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $backup 'resources') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $backup 'model') -Force | Out-Null
     New-Item -ItemType Directory -Path $install -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $backup 'runtime\handy.exe') -Value 'legacy runtime'
     Set-Content -LiteralPath (Join-Path $backup 'resources\tray_idle.png') -Value 'legacy resource'
+    Set-Content -LiteralPath (Join-Path $backup 'model\nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf') -Value 'legacy model'
     Set-Content -LiteralPath (Join-Path $backup 'settings_store.json') -Value '{"model":"legacy"}'
 
     # Exact legacy shape: no schema version or stored original hashes.
@@ -25,7 +27,7 @@ try {
         })
         resources_existed = $true
         model_relative_path = 'Data\models\nemotron.gguf'
-        model_existed = $false
+        model_existed = $true
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $backup 'manifest.json') -Encoding UTF8
 
     $installer = Join-Path $PSScriptRoot 'install-portable-progressive.ps1'

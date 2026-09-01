@@ -139,7 +139,7 @@ function Get-RollbackPlan([string]$ManifestPath) {
 
     $modelHash = $null
     if ([bool]$manifest.model_existed) {
-        $modelBackup = Join-Path $backupRoot 'model' $ModelFileName
+        $modelBackup = Join-Path (Join-Path $backupRoot 'model') $ModelFileName
         if (-not (Test-Path -LiteralPath $modelBackup -PathType Leaf)) {
             throw 'Rollback model backup is missing.'
         }
@@ -215,7 +215,7 @@ function Restore-Install([string]$ManifestPath) {
     $modelTarget = Join-Path $targetRoot ([string]$manifest.model_relative_path)
     Assert-UnderRoot -Path $modelTarget -Root $targetRoot
     if ([bool]$manifest.model_existed) {
-        Copy-Item -LiteralPath (Join-Path $backupRoot 'model' $ModelFileName) -Destination $modelTarget -Force
+        Copy-Item -LiteralPath (Join-Path (Join-Path $backupRoot 'model') $ModelFileName) -Destination $modelTarget -Force
         if ((Get-Sha256 $modelTarget) -ne [string]$plan.ModelHash) {
             throw 'Rollback model verification failed.'
         }
@@ -310,7 +310,7 @@ try {
     $originalModelHash = if ($modelExisted) { Get-Sha256 $installedModel } else { $null }
     if ($modelExisted) {
         New-Item -ItemType Directory -Path (Join-Path $backupRoot 'model') -Force | Out-Null
-        Copy-Item -LiteralPath $installedModel -Destination (Join-Path $backupRoot 'model' $ModelFileName)
+        Copy-Item -LiteralPath $installedModel -Destination (Join-Path (Join-Path $backupRoot 'model') $ModelFileName)
     }
 
     $manifest = [ordered]@{
