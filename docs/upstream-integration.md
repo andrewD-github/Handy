@@ -4,8 +4,8 @@ This branch keeps the progressive-dictation customization as a small patch stack
 
 ## Current base
 
-- Stable upstream tag: `v0.9.5`
-- Selected post-release fix: `9e534a3` (`fix(portable): keep Hugging Face models in Data`)
+- Stable upstream tag: `v0.9.6` (`af48dd6`)
+- The earlier portable Hugging Face data fix is included upstream in this release.
 - Integration branch: `codex/handy-0.9.5-progressive`
 - Rejected experiment preserved outside the branch: stash `rejected-target-content-guard-experiment-before-0.9.5-port`
 
@@ -36,7 +36,7 @@ Audio capture, inference engines, model catalogs, stream commitment, stream fina
 6. Submit/click residual-text guard.
 7. Presentation-only token theme patch.
 
-Each patch must remain independently testable. Future upgrades start from a new stable upstream tag and reapply this short series; they do not merge an old transcription engine into the new one.
+Each patch must remain independently testable. Future upgrades merge the complete new stable upstream tag into this branch, resolve the documented hook points, and replay the frozen real-use cohort; they do not copy an old transcription engine into the new one.
 
 ## Rejected design
 

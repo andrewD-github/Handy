@@ -29,6 +29,10 @@ try {
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $backup 'manifest.json') -Encoding UTF8
 
     $installer = Join-Path $PSScriptRoot 'install-portable-progressive.ps1'
+    $installerSource = Get-Content -Raw -LiteralPath $installer
+    if ($installerSource -notmatch [regex]::Escape("[string]`$CandidateRoot = 'D:\Apps\Handy-Candidate-0.9.6-progressive'")) {
+        throw 'Installer default candidate path is not pinned to v0.9.6.'
+    }
     $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $installer -ValidateRollbackFrom (Join-Path $backup 'manifest.json')
     if ($LASTEXITCODE -ne 0 -or $output -notmatch 'complete and verifiable') {
         throw 'Legacy rollback manifest validation failed.'

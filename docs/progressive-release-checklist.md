@@ -8,7 +8,8 @@ installation.
 
 - Baseline dataset: `D:\Apps\Handy\Data\analysis\actual-usage-20260712`
 - Frozen source snapshot: `D:\Apps\Handy\Data\analysis\snapshot-20260712-122337`
-- Candidate outputs: `D:\Apps\Handy\Data\analysis\candidate-0.9.5-progressive`
+- Verified v0.9.5 outputs: `D:\Apps\Handy\Data\analysis\candidate-0.9.5-progressive`
+- New candidate outputs: `D:\Apps\Handy\Data\analysis\candidate-0.9.6-progressive`
 - Replay cohort: all 17 exact WAV/history/diagnostic joins from `manifest.json`
 - Join rule: session ID, history ID, exact WAV filename, and corroborating
   timestamps; never directory order
@@ -84,10 +85,12 @@ Run the isolated portable candidate, not the installed executable.
 
 ## Future upstream upgrade
 
-1. Create a fresh branch from the new stable upstream tag.
-2. Apply the commits listed in `docs/upstream-integration.md` by concern.
-3. Resolve only the documented hook points; never restore the old batch
-   scheduler or copy an old transcription manager wholesale.
+1. Fetch and verify the new stable upstream tag.
+2. Preview the merge and inventory textual plus semantic overlap with the
+   custom hooks listed in `docs/upstream-integration.md`.
+3. Merge the complete tag. Resolve only the documented hook points; never
+   restore an old batch scheduler or copy an old transcription manager
+   wholesale.
 4. Regenerate bindings, run every automated gate, rebuild the isolated
    candidate, and replay the same frozen cohort.
 5. Add new exact-use sessions to a new frozen cohort rather than modifying the
