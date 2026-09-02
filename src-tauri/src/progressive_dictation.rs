@@ -481,7 +481,7 @@ impl ProgressiveDictationManager {
 mod tests {
     use super::{
         ProgressiveCompletion, ProgressiveCoordinator, ProgressiveDecision, ProgressiveSession,
-        ProgressiveSkipReason, PromptEditError, PromptEditor, TargetIdentity,
+        ProgressiveSkipReason, PromptEditError, PromptEditor, RefocusPolicy, TargetIdentity,
     };
     use std::sync::{Arc, Mutex};
 
@@ -526,6 +526,10 @@ mod tests {
     }
 
     impl PromptEditor for Arc<FakeEditor> {
+        fn current_target(&self) -> Option<TargetIdentity> {
+            *self.current_target.lock().unwrap()
+        }
+
         fn append_verified(
             &self,
             expected_target: TargetIdentity,
@@ -567,6 +571,104 @@ mod tests {
         let expected = TargetIdentity::test_with_interaction(10, 20, 4);
 
         assert!(!expected.matches(TargetIdentity::test_with_interaction(10, 20, 5)));
+    }
+
+    #[test]
+    fn resume_mode_catches_up_once_when_original_target_returns() {
+        let original = TargetIdentity::test_with_interaction(10, 20, 1);
+        let other = TargetIdentity::test_with_interaction(10, 30, 2);
+        let returned = TargetIdentity::test_with_interaction(10, 20, 3);
+        let editor = Arc::new(FakeEditor::new(original));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, original, RefocusPolicy::ResumeOriginalTarget);
+
+        assert_eq!(
+            coordinator.apply_snapshot(7, "hello", ""),
+            ProgressiveDecision::Append("hello".into())
+        );
+        editor.set_target(other);
+        assert_eq!(
+            coordinator.apply_snapshot(7, "hello world", ""),
+            ProgressiveDecision::Paused
+        );
+        assert_eq!(editor.inserts(), vec!["hello"]);
+
+        editor.set_target(returned);
+        assert_eq!(
+            coordinator.apply_snapshot(7, "hello world again", ""),
+            ProgressiveDecision::ResumeAppend(" world again".into())
+        );
+        assert_eq!(editor.inserts(), vec!["hello", " world again"]);
+
+        assert_eq!(
+            coordinator.apply_snapshot(7, "hello world again", ""),
+            ProgressiveDecision::Skip(ProgressiveSkipReason::Duplicate)
+        );
+        assert_eq!(editor.inserts(), vec!["hello", " world again"]);
+    }
+
+    #[test]
+    fn resume_mode_rearms_after_a_click_in_the_original_native_target() {
+        let original = TargetIdentity::test_with_interaction(10, 20, 4);
+        let returned = TargetIdentity::test_with_interaction(10, 20, 5);
+        let editor = Arc::new(FakeEditor::new(original));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, original, RefocusPolicy::ResumeOriginalTarget);
+        coordinator.apply_snapshot(7, "hello", "");
+        editor.set_target(returned);
+
+        assert_eq!(
+            coordinator.apply_snapshot(7, "hello again", ""),
+            ProgressiveDecision::ResumeAppend(" again".into())
+        );
+        assert_eq!(editor.inserts(), vec!["hello", " again"]);
+    }
+
+    #[test]
+    fn resume_mode_never_finalizes_into_a_different_target() {
+        let original = TargetIdentity::test_with_interaction(10, 20, 1);
+        let other = TargetIdentity::test_with_interaction(11, 30, 2);
+        let editor = Arc::new(FakeEditor::new(original));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, original, RefocusPolicy::ResumeOriginalTarget);
+        coordinator.apply_snapshot(7, "hello", "");
+        editor.set_target(other);
+        assert_eq!(
+            coordinator.apply_snapshot(7, "hello world", ""),
+            ProgressiveDecision::Paused
+        );
+
+        assert_eq!(
+            coordinator.finish(7, "hello world again"),
+            ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged),
+                owns_output: true,
+            }
+        );
+        assert_eq!(editor.inserts(), vec!["hello"]);
+    }
+
+    #[test]
+    fn cancelled_resume_session_cannot_rearm() {
+        let original = TargetIdentity::test_with_interaction(10, 20, 1);
+        let other = TargetIdentity::test_with_interaction(10, 30, 2);
+        let returned = TargetIdentity::test_with_interaction(10, 20, 3);
+        let editor = Arc::new(FakeEditor::new(original));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, original, RefocusPolicy::ResumeOriginalTarget);
+        editor.set_target(other);
+        assert_eq!(
+            coordinator.apply_snapshot(7, "hello", ""),
+            ProgressiveDecision::Paused
+        );
+        coordinator.cancel(7);
+        editor.set_target(returned);
+
+        assert_eq!(
+            coordinator.apply_snapshot(7, "hello world", ""),
+            ProgressiveDecision::Skip(ProgressiveSkipReason::Stopped)
+        );
+        assert!(editor.inserts().is_empty());
     }
 
     #[test]
