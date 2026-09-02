@@ -497,6 +497,10 @@ pub struct AppSettings {
     pub overlay_style: OverlayStyle,
     #[serde(default)]
     pub progressive_output_mode: ProgressiveOutputMode,
+    /// Custom direct-prompt policy. Disabled by default so upstream-derived
+    /// settings retain the fail-closed behavior after any pointer interaction.
+    #[serde(default)]
+    pub direct_prompt_resume_on_refocus: bool,
 }
 
 fn default_model() -> String {
@@ -962,6 +966,7 @@ pub fn get_default_settings() -> AppSettings {
         vad_enabled: default_vad_enabled(),
         overlay_style: default_overlay_style(),
         progressive_output_mode: ProgressiveOutputMode::default(),
+        direct_prompt_resume_on_refocus: false,
     }
 }
 
@@ -1489,6 +1494,21 @@ mod tests {
             restored.progressive_output_mode,
             ProgressiveOutputMode::DirectPrompt
         );
+    }
+
+    #[test]
+    fn direct_prompt_refocus_resume_defaults_off_and_round_trips() {
+        let absent: AppSettings =
+            serde_json::from_value(serde_json::json!({})).expect("partial settings use defaults");
+        assert!(!absent.direct_prompt_resume_on_refocus);
+
+        let mut enabled = get_default_settings();
+        assert!(!enabled.direct_prompt_resume_on_refocus);
+        enabled.direct_prompt_resume_on_refocus = true;
+
+        let stored = serde_json::to_value(&enabled).unwrap();
+        let restored: AppSettings = serde_json::from_value(stored).unwrap();
+        assert!(restored.direct_prompt_resume_on_refocus);
     }
 
     #[test]

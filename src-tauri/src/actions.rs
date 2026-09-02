@@ -525,7 +525,7 @@ impl ShortcutAction for TranscribeAction {
             && !self.post_process
             && settings.progressive_output_mode == ProgressiveOutputMode::DirectPrompt
         {
-            progressive_dictation.start()
+            progressive_dictation.start(settings.direct_prompt_resume_on_refocus)
         } else {
             None
         };

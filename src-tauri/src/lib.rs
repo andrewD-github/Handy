@@ -742,6 +742,7 @@ pub fn run(cli_args: CliArgs) {
             shortcut::change_overlay_position_setting,
             shortcut::change_overlay_style_setting,
             shortcut::change_progressive_output_mode_setting,
+            shortcut::change_direct_prompt_resume_on_refocus_setting,
             shortcut::change_debug_mode_setting,
             shortcut::change_word_correction_threshold_setting,
             shortcut::change_extra_recording_buffer_setting,

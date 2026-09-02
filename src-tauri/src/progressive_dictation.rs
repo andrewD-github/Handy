@@ -493,7 +493,7 @@ impl ProgressiveDictationManager {
         }
     }
 
-    pub(crate) fn start(&self) -> Option<u64> {
+    pub(crate) fn start(&self, resume_on_refocus: bool) -> Option<u64> {
         if !crate::input::target_interaction_monitor_ready() {
             log::error!(
                 "Direct-prompt session not started: target interaction monitor unavailable"
@@ -507,10 +507,15 @@ impl ProgressiveDictationManager {
             return None;
         };
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        let policy = if resume_on_refocus {
+            RefocusPolicy::ResumeOriginalTarget
+        } else {
+            RefocusPolicy::Stop
+        };
         self.coordinator
             .lock()
             .unwrap()
-            .start(generation, target, RefocusPolicy::Stop);
+            .start(generation, target, policy);
         self.active_generation.store(generation, Ordering::Release);
         let settings = crate::settings::get_settings(&self.app);
         *self.diagnostic.lock().unwrap() =

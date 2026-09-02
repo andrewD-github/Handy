@@ -61,6 +61,7 @@ impl DiagnosticSession {
                 "selected_model": settings.selected_model,
                 "selected_language": settings.selected_language,
                 "progressive_output_mode": format!("{:?}", settings.progressive_output_mode),
+                "direct_prompt_resume_on_refocus": settings.direct_prompt_resume_on_refocus,
                 "paste_method": format!("{:?}", settings.paste_method),
                 "transcribe_accelerator": format!("{:?}", settings.transcribe_accelerator),
                 "ort_accelerator": format!("{:?}", settings.ort_accelerator),

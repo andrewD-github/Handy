@@ -163,6 +163,8 @@ const settingUpdaters: {
   overlay_style: (value) => commands.changeOverlayStyleSetting(value as string),
   progressive_output_mode: (value) =>
     commands.changeProgressiveOutputModeSetting(value as string),
+  direct_prompt_resume_on_refocus: (value) =>
+    commands.changeDirectPromptResumeOnRefocusSetting(value as boolean),
   vad_enabled: (value) => commands.changeVadEnabledSetting(value as boolean),
   filler_word_removal_enabled: (value) =>
     commands.changeFillerWordRemovalEnabledSetting(value as boolean),

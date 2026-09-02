@@ -117,6 +117,14 @@ async changeProgressiveOutputModeSetting(mode: string) : Promise<Result<null, st
     else return { status: "error", error: e  as any };
 }
 },
+async changeDirectPromptResumeOnRefocusSetting(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_direct_prompt_resume_on_refocus_setting", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async changeDebugModeSetting(enabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_debug_mode_setting", { enabled }) };
@@ -977,7 +985,12 @@ transcribe_gpu_device?: string | null; extra_recording_buffer_ms?: number; vad_e
  * not gated on this — that follows model capability. Migrated from the old
  * `overlay_position` (position `none` → style `None`).
  */
-overlay_style?: OverlayStyle; progressive_output_mode?: ProgressiveOutputMode }
+overlay_style?: OverlayStyle; progressive_output_mode?: ProgressiveOutputMode;
+/**
+ * Custom direct-prompt policy. Disabled by default so upstream-derived
+ * settings retain the fail-closed behavior after any pointer interaction.
+ */
+direct_prompt_resume_on_refocus?: boolean }
 export type AudioDevice = { index: string; name: string; is_default: boolean }
 export type AutoSubmitKey = "enter" | "ctrl_enter" | "cmd_enter"
 export type AvailableAccelerators = { transcribe: string[]; ort: string[]; gpu_devices: GpuDeviceOption[] }

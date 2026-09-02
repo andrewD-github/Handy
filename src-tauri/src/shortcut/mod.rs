@@ -700,6 +700,18 @@ pub fn change_progressive_output_mode_setting(app: AppHandle, mode: String) -> R
 
 #[tauri::command]
 #[specta::specta]
+pub fn change_direct_prompt_resume_on_refocus_setting(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.direct_prompt_resume_on_refocus = enabled;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn change_debug_mode_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.debug_mode = enabled;
