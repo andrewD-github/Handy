@@ -26,6 +26,11 @@ impl TargetIdentity {
         self == current
     }
 
+    pub(crate) fn same_native_target(self, current: TargetIdentity) -> bool {
+        self.foreground_window == current.foreground_window
+            && self.focused_control == current.focused_control
+    }
+
     #[cfg(test)]
     fn test(foreground_window: isize, focused_control: isize) -> Self {
         Self {
@@ -62,6 +67,8 @@ pub(crate) enum ProgressiveSkipReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProgressiveDecision {
     Append(String),
+    ResumeAppend(String),
+    Paused,
     Skip(ProgressiveSkipReason),
     FinalConflict {
         displayed: String,
@@ -77,7 +84,6 @@ pub(crate) struct ProgressiveCompletion {
 
 pub(crate) struct ProgressiveSession {
     generation: u64,
-    #[allow(dead_code)]
     target: TargetIdentity,
     displayed: String,
     stopped: bool,
@@ -144,6 +150,14 @@ impl ProgressiveSession {
         self.target
     }
 
+    fn set_target(&mut self, target: TargetIdentity) {
+        self.target = target;
+    }
+
+    fn displayed(&self) -> &str {
+        &self.displayed
+    }
+
     fn generation(&self) -> u64 {
         self.generation
     }
@@ -160,7 +174,15 @@ pub(crate) enum PromptEditError {
     PartialEdit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefocusPolicy {
+    Stop,
+    ResumeOriginalTarget,
+}
+
 pub(crate) trait PromptEditor {
+    fn current_target(&self) -> Option<TargetIdentity>;
+
     fn append_verified(
         &self,
         expected_target: TargetIdentity,
@@ -179,6 +201,10 @@ impl RuntimePromptEditor {
 }
 
 impl PromptEditor for RuntimePromptEditor {
+    fn current_target(&self) -> Option<TargetIdentity> {
+        crate::input::capture_target_identity()
+    }
+
     fn append_verified(
         &self,
         expected_target: TargetIdentity,
@@ -213,7 +239,10 @@ pub(crate) struct ProgressiveCoordinator<E> {
     editor: E,
     session: Option<ProgressiveSession>,
     inserted_any: bool,
+    inserted: String,
     unsafe_target: bool,
+    refocus_policy: RefocusPolicy,
+    paused: bool,
 }
 
 impl<E: PromptEditor> ProgressiveCoordinator<E> {
@@ -222,14 +251,25 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
             editor,
             session: None,
             inserted_any: false,
+            inserted: String::new(),
             unsafe_target: false,
+            refocus_policy: RefocusPolicy::Stop,
+            paused: false,
         }
     }
 
-    pub(crate) fn start(&mut self, generation: u64, target: TargetIdentity) {
+    pub(crate) fn start(
+        &mut self,
+        generation: u64,
+        target: TargetIdentity,
+        refocus_policy: RefocusPolicy,
+    ) {
         self.session = Some(ProgressiveSession::start(generation, target));
         self.inserted_any = false;
+        self.inserted.clear();
         self.unsafe_target = false;
+        self.refocus_policy = refocus_policy;
+        self.paused = false;
     }
 
     pub(crate) fn apply_snapshot(
@@ -241,17 +281,50 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
         let Some(session) = self.session.as_mut() else {
             return ProgressiveDecision::Skip(ProgressiveSkipReason::Stopped);
         };
-        let decision = session.apply_snapshot(generation, committed, tentative);
-        let ProgressiveDecision::Append(text) = &decision else {
-            return decision;
-        };
+        let snapshot_decision = session.apply_snapshot(generation, committed, tentative);
+        if !matches!(
+            snapshot_decision,
+            ProgressiveDecision::Append(_)
+                | ProgressiveDecision::Skip(ProgressiveSkipReason::Duplicate)
+        ) {
+            return snapshot_decision;
+        }
 
-        match self.editor.append_verified(session.target(), text) {
-            Ok(()) => self.inserted_any = true,
-            Err(PromptEditError::TargetChanged) => {
-                session.cancel();
+        let Some(current_target) = self.editor.current_target() else {
+            return self.handle_target_change();
+        };
+        let exact_match = session.target().matches(current_target);
+        let same_native_target = session.target().same_native_target(current_target);
+        let resumed = self.paused || !exact_match;
+        match self.refocus_policy {
+            RefocusPolicy::Stop if !exact_match => return self.handle_target_change(),
+            RefocusPolicy::ResumeOriginalTarget if !same_native_target => {
+                self.paused = true;
                 self.unsafe_target = true;
-                return ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged);
+                return ProgressiveDecision::Paused;
+            }
+            RefocusPolicy::ResumeOriginalTarget => session.set_target(current_target),
+            RefocusPolicy::Stop => {}
+        }
+
+        let Some(text) = session.displayed().strip_prefix(&self.inserted) else {
+            session.cancel();
+            return ProgressiveDecision::Skip(ProgressiveSkipReason::ContradictoryDisplay);
+        };
+        if text.is_empty() {
+            self.paused = false;
+            return snapshot_decision;
+        }
+        let text = text.to_string();
+
+        match self.editor.append_verified(session.target(), &text) {
+            Ok(()) => {
+                self.inserted_any = true;
+                self.inserted.push_str(&text);
+                self.paused = false;
+            }
+            Err(PromptEditError::TargetChanged) => {
+                return self.handle_target_change();
             }
             Err(PromptEditError::EditFailed) => {
                 session.cancel();
@@ -264,7 +337,11 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
             }
         }
 
-        decision
+        if resumed {
+            ProgressiveDecision::ResumeAppend(text)
+        } else {
+            ProgressiveDecision::Append(text)
+        }
     }
 
     pub(crate) fn finish(&mut self, generation: u64, final_text: &str) -> ProgressiveCompletion {
@@ -280,16 +357,62 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
                 owns_output: false,
             };
         }
-        let decision = session.finish(generation, final_text);
-        let ProgressiveDecision::Append(text) = &decision else {
+        let final_decision = session.finish(generation, final_text);
+        if !matches!(
+            final_decision,
+            ProgressiveDecision::Append(_)
+                | ProgressiveDecision::Skip(ProgressiveSkipReason::Duplicate)
+        ) {
             return ProgressiveCompletion {
-                decision,
+                decision: final_decision,
+                owns_output: self.inserted_any || self.unsafe_target,
+            };
+        }
+
+        let Some(current_target) = self.editor.current_target() else {
+            self.unsafe_target = true;
+            return ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged),
+                owns_output: true,
+            };
+        };
+        let exact_match = session.target().matches(current_target);
+        let same_native_target = session.target().same_native_target(current_target);
+        let resumed = self.paused || !exact_match;
+        let target_is_eligible = match self.refocus_policy {
+            RefocusPolicy::Stop => exact_match,
+            RefocusPolicy::ResumeOriginalTarget => same_native_target,
+        };
+        if !target_is_eligible {
+            self.unsafe_target = true;
+            return ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged),
+                owns_output: true,
+            };
+        }
+        if self.refocus_policy == RefocusPolicy::ResumeOriginalTarget {
+            session.set_target(current_target);
+        }
+        let Some(text) = session.displayed().strip_prefix(&self.inserted) else {
+            return ProgressiveCompletion {
+                decision: ProgressiveDecision::Skip(ProgressiveSkipReason::ContradictoryDisplay),
                 owns_output: self.inserted_any || self.unsafe_target,
             };
         };
+        if text.is_empty() {
+            return ProgressiveCompletion {
+                decision: final_decision,
+                owns_output: self.inserted_any || self.unsafe_target,
+            };
+        }
+        let text = text.to_string();
 
-        match self.editor.append_verified(session.target(), text) {
-            Ok(()) => self.inserted_any = true,
+        match self.editor.append_verified(session.target(), &text) {
+            Ok(()) => {
+                self.inserted_any = true;
+                self.inserted.push_str(&text);
+                self.paused = false;
+            }
             Err(PromptEditError::TargetChanged) => {
                 self.unsafe_target = true;
                 return ProgressiveCompletion {
@@ -313,7 +436,11 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
         }
 
         ProgressiveCompletion {
-            decision,
+            decision: if resumed {
+                ProgressiveDecision::ResumeAppend(text)
+            } else {
+                ProgressiveDecision::Append(text)
+            },
             owns_output: self.inserted_any || self.unsafe_target,
         }
     }
@@ -323,7 +450,25 @@ impl<E: PromptEditor> ProgressiveCoordinator<E> {
             if session.generation() == generation {
                 session.cancel();
                 self.inserted_any = false;
+                self.inserted.clear();
                 self.unsafe_target = false;
+                self.paused = false;
+            }
+        }
+    }
+
+    fn handle_target_change(&mut self) -> ProgressiveDecision {
+        self.unsafe_target = true;
+        match self.refocus_policy {
+            RefocusPolicy::Stop => {
+                if let Some(session) = self.session.as_mut() {
+                    session.cancel();
+                }
+                ProgressiveDecision::Skip(ProgressiveSkipReason::TargetChanged)
+            }
+            RefocusPolicy::ResumeOriginalTarget => {
+                self.paused = true;
+                ProgressiveDecision::Paused
             }
         }
     }
@@ -362,7 +507,10 @@ impl ProgressiveDictationManager {
             return None;
         };
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
-        self.coordinator.lock().unwrap().start(generation, target);
+        self.coordinator
+            .lock()
+            .unwrap()
+            .start(generation, target, RefocusPolicy::Stop);
         self.active_generation.store(generation, Ordering::Release);
         let settings = crate::settings::get_settings(&self.app);
         *self.diagnostic.lock().unwrap() =
@@ -676,7 +824,7 @@ mod tests {
         let target = TargetIdentity::test(10, 20);
         let editor = Arc::new(FakeEditor::new(target));
         let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
-        coordinator.start(7, target);
+        coordinator.start(7, target, RefocusPolicy::Stop);
 
         assert_eq!(
             coordinator.apply_snapshot(7, "hello", ""),
@@ -690,7 +838,7 @@ mod tests {
         let target = TargetIdentity::test(10, 20);
         let editor = Arc::new(FakeEditor::new(target));
         let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
-        coordinator.start(7, target);
+        coordinator.start(7, target, RefocusPolicy::Stop);
 
         assert_eq!(
             coordinator.apply_snapshot(6, "hello", ""),
@@ -704,7 +852,7 @@ mod tests {
         let target = TargetIdentity::test(10, 20);
         let editor = Arc::new(FakeEditor::new(target));
         let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
-        coordinator.start(7, target);
+        coordinator.start(7, target, RefocusPolicy::Stop);
         editor.set_target(TargetIdentity::test(10, 30));
 
         assert_eq!(
@@ -723,7 +871,7 @@ mod tests {
         let target = TargetIdentity::test(10, 20);
         let editor = Arc::new(FakeEditor::new(target));
         let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
-        coordinator.start(7, target);
+        coordinator.start(7, target, RefocusPolicy::Stop);
         editor.change_target_during_next_append(TargetIdentity::test_with_interaction(10, 20, 1));
 
         assert_eq!(
@@ -738,7 +886,7 @@ mod tests {
         let target = TargetIdentity::test(10, 20);
         let editor = Arc::new(FakeEditor::new(target));
         let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
-        coordinator.start(7, target);
+        coordinator.start(7, target, RefocusPolicy::Stop);
         editor.fail_next_append();
 
         assert_eq!(
@@ -759,7 +907,7 @@ mod tests {
         let target = TargetIdentity::test(10, 20);
         let editor = Arc::new(FakeEditor::new(target));
         let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
-        coordinator.start(7, target);
+        coordinator.start(7, target, RefocusPolicy::Stop);
         editor.partially_fail_next_append();
 
         assert_eq!(
@@ -780,7 +928,7 @@ mod tests {
         let target = TargetIdentity::test(10, 20);
         let editor = Arc::new(FakeEditor::new(target));
         let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
-        coordinator.start(7, target);
+        coordinator.start(7, target, RefocusPolicy::Stop);
         coordinator.apply_snapshot(7, "hello", "");
 
         assert_eq!(
@@ -798,8 +946,8 @@ mod tests {
         let target = TargetIdentity::test(10, 20);
         let editor = Arc::new(FakeEditor::new(target));
         let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
-        coordinator.start(7, target);
-        coordinator.start(8, target);
+        coordinator.start(7, target, RefocusPolicy::Stop);
+        coordinator.start(8, target, RefocusPolicy::Stop);
 
         assert_eq!(
             coordinator.apply_snapshot(7, "old text", ""),
@@ -820,7 +968,7 @@ mod tests {
         let target = TargetIdentity::test(10, 20);
         let editor = Arc::new(FakeEditor::new(target));
         let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
-        coordinator.start(7, target);
+        coordinator.start(7, target, RefocusPolicy::Stop);
         coordinator.cancel(7);
 
         assert_eq!(
@@ -842,7 +990,7 @@ mod tests {
         let target = TargetIdentity::test(10, 20);
         let editor = Arc::new(FakeEditor::new(target));
         let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
-        coordinator.start(7, target);
+        coordinator.start(7, target, RefocusPolicy::Stop);
         coordinator.apply_snapshot(7, "hello", "");
         editor.set_target(TargetIdentity::test(10, 30));
 
@@ -861,7 +1009,7 @@ mod tests {
         let target = TargetIdentity::test(10, 20);
         let editor = Arc::new(FakeEditor::new(target));
         let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
-        coordinator.start(7, target);
+        coordinator.start(7, target, RefocusPolicy::Stop);
         editor.set_target(TargetIdentity::test(10, 30));
 
         assert_eq!(
