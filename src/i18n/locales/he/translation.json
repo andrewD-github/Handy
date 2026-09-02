@@ -314,6 +314,10 @@
         "options": {
           "overlay": "Handy overlay",
           "directPrompt": "Directly in the active prompt"
+        },
+        "resumeOnRefocus": {
+          "label": "Resume direct output when target regains focus",
+          "description": "When enabled, direct output pauses while another target is active and resumes when the original target returns. Browser apps may reuse the same prompt control after Submit, so pending text can resume in a new prompt."
         }
       },
       "pasteMethod": {

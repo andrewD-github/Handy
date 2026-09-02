@@ -4,6 +4,7 @@ import type { ProgressiveOutputMode } from "@/bindings";
 import { useSettings } from "../../hooks/useSettings";
 import { Dropdown } from "../ui/Dropdown";
 import { SettingContainer } from "../ui/SettingContainer";
+import { ToggleSwitch } from "../ui/ToggleSwitch";
 
 interface ProgressiveOutputModeProps {
   descriptionMode?: "inline" | "tooltip";
@@ -16,36 +17,58 @@ export const ProgressiveOutputModeSetting: React.FC<ProgressiveOutputModeProps> 
     const { getSetting, updateSetting, isUpdating } = useSettings();
     const selected = (getSetting("progressive_output_mode") ||
       "overlay") as ProgressiveOutputMode;
+    const resumeOnRefocus =
+      getSetting("direct_prompt_resume_on_refocus") ?? false;
 
     return (
-      <SettingContainer
-        title={t("settings.advanced.progressiveOutput.title")}
-        description={t("settings.advanced.progressiveOutput.description")}
-        descriptionMode={descriptionMode}
-        grouped={grouped}
-      >
-        <Dropdown
-          options={[
-            {
-              value: "overlay",
-              label: t("settings.advanced.progressiveOutput.options.overlay"),
-            },
-            {
-              value: "direct_prompt",
-              label: t(
-                "settings.advanced.progressiveOutput.options.directPrompt",
-              ),
-            },
-          ]}
-          selectedValue={selected}
-          onSelect={(value) =>
-            updateSetting(
-              "progressive_output_mode",
-              value as ProgressiveOutputMode,
-            )
-          }
-          disabled={isUpdating("progressive_output_mode")}
-        />
-      </SettingContainer>
+      <>
+        <SettingContainer
+          title={t("settings.advanced.progressiveOutput.title")}
+          description={t("settings.advanced.progressiveOutput.description")}
+          descriptionMode={descriptionMode}
+          grouped={grouped}
+        >
+          <Dropdown
+            options={[
+              {
+                value: "overlay",
+                label: t("settings.advanced.progressiveOutput.options.overlay"),
+              },
+              {
+                value: "direct_prompt",
+                label: t(
+                  "settings.advanced.progressiveOutput.options.directPrompt",
+                ),
+              },
+            ]}
+            selectedValue={selected}
+            onSelect={(value) =>
+              updateSetting(
+                "progressive_output_mode",
+                value as ProgressiveOutputMode,
+              )
+            }
+            disabled={isUpdating("progressive_output_mode")}
+          />
+        </SettingContainer>
+
+        {selected === "direct_prompt" && (
+          <ToggleSwitch
+            checked={resumeOnRefocus}
+            onChange={(enabled) =>
+              updateSetting("direct_prompt_resume_on_refocus", enabled)
+            }
+            isUpdating={isUpdating("direct_prompt_resume_on_refocus")}
+            label={t(
+              "settings.advanced.progressiveOutput.resumeOnRefocus.label",
+            )}
+            description={t(
+              "settings.advanced.progressiveOutput.resumeOnRefocus.description",
+            )}
+            descriptionMode={descriptionMode}
+            grouped={grouped}
+          />
+        )}
+      </>
     );
   });

@@ -52,10 +52,19 @@ meet all of these gates on the 17-session cohort:
 Run the isolated portable candidate, not the installed executable.
 
 - [ ] ChatGPT: text visibly grows inside the active prompt during dictation.
-- [ ] ChatGPT: click Submit before F4, then press F4; no old-session tail appears
-      in the new prompt.
+- [ ] With refocus resume disabled: click Submit before F4, then press F4; no
+      old-session tail appears in the new prompt.
+- [ ] With refocus resume enabled: click away from the dictation prompt; direct
+      insertion pauses while the Handy live overlay continues.
+- [ ] With refocus resume enabled: click back into the original target; the
+      accumulated append-only suffix appears exactly once and streaming continues.
+- [ ] With refocus resume enabled: stop while another target is active; no final
+      tail is inserted into that target.
+- [ ] With refocus resume enabled: verify and record the accepted limitation
+      that a reused Chromium/WebView prompt may receive pending text after Submit.
 - [ ] Mouse movement alone does not suspend or invalidate live insertion.
-- [ ] A pointer click during a session prevents all later prompt insertion.
+- [ ] With refocus resume disabled, a pointer click during a session prevents
+      all later prompt insertion.
 - [ ] Stop with F4 appends at most the measured final tail once.
 - [ ] Cancel produces no late text.
 - [ ] Rapid F4 restart makes every previous-generation update stale.
