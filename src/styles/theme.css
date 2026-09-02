@@ -1,0 +1,90 @@
+/* Handy Colors */
+
+:root {
+  /* Palette source of truth. Each themed color is defined once as a
+     light/dark pair; the active tokens below and the `data-theme` overrides
+     in App.css reference these, so a hex value lives in exactly one place. */
+  --light-color-text: #eaf2ff;
+  --light-color-background: #08111f;
+  --light-color-background-ui: #145da0;
+  --light-color-logo-primary: #4bb8ff;
+  --light-color-logo-stroke: #b7e4ff;
+  --light-color-text-stroke: #06101d;
+  --light-color-mid-gray: #7f8da3;
+
+  --dark-color-text: #eef6ff;
+  --dark-color-background: #050c17;
+  --dark-color-background-ui: #0e4f8a;
+  --dark-color-logo-primary: #5dc8ff;
+  --dark-color-logo-stroke: #c6ecff;
+  --dark-color-text-stroke: #030914;
+  --dark-color-mid-gray: #8797ad;
+
+  /* Semantic status colors. First used by SecureInputWarning; intended to
+     replace the ad-hoc yellow-500/red-500 usages (e.g. ui/Alert.tsx) over
+     time so status styling is themeable from one place. */
+  --light-color-warning: #d97706;
+  --light-color-error: #dc2626;
+  --dark-color-warning: #fbbf24;
+  --dark-color-error: #f87171;
+
+  /* Active palette — defaults to light, follows the OS via the media query
+     below, or is forced by `data-theme` (see the overrides below). */
+  --color-text: var(--light-color-text);
+  --color-background: var(--light-color-background);
+  --color-background-ui: var(--light-color-background-ui);
+  --color-logo-primary: var(--light-color-logo-primary);
+  --color-logo-stroke: var(--light-color-logo-stroke);
+  --color-text-stroke: var(--light-color-text-stroke);
+  --color-mid-gray: var(--light-color-mid-gray);
+  --color-warning: var(--light-color-warning);
+  --color-error: var(--light-color-error);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-text: var(--dark-color-text);
+    --color-background: var(--dark-color-background);
+    --color-background-ui: var(--dark-color-background-ui);
+    --color-logo-primary: var(--dark-color-logo-primary);
+    --color-logo-stroke: var(--dark-color-logo-stroke);
+    --color-text-stroke: var(--dark-color-text-stroke);
+    --color-mid-gray: var(--dark-color-mid-gray);
+    --color-warning: var(--dark-color-warning);
+    --color-error: var(--dark-color-error);
+  }
+}
+
+/*
+ * Explicit theme override, driven by the `theme` setting via
+ * `document.documentElement.dataset.theme`. When set, the higher-specificity
+ * attribute selectors win over the `prefers-color-scheme` media query above,
+ * so a user can keep Handy light or dark regardless of the OS setting.
+ * `system` (or no attribute) leaves the OS in charge.
+ *
+ * Lives here (not in App.css) so every window that imports the shared palette —
+ * the settings window and the recording overlay alike — honours the override.
+ */
+:root[data-theme="light"] {
+  --color-text: var(--light-color-text);
+  --color-background: var(--light-color-background);
+  --color-background-ui: var(--light-color-background-ui);
+  --color-logo-primary: var(--light-color-logo-primary);
+  --color-logo-stroke: var(--light-color-logo-stroke);
+  --color-text-stroke: var(--light-color-text-stroke);
+  --color-mid-gray: var(--light-color-mid-gray);
+  --color-warning: var(--light-color-warning);
+  --color-error: var(--light-color-error);
+}
+
+:root[data-theme="dark"] {
+  --color-text: var(--dark-color-text);
+  --color-background: var(--dark-color-background);
+  --color-background-ui: var(--dark-color-background-ui);
+  --color-logo-primary: var(--dark-color-logo-primary);
+  --color-logo-stroke: var(--dark-color-logo-stroke);
+  --color-text-stroke: var(--dark-color-text-stroke);
+  --color-mid-gray: var(--dark-color-mid-gray);
+  --color-warning: var(--dark-color-warning);
+  --color-error: var(--dark-color-error);
+}

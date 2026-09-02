@@ -1,4 +1,12 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Play, Pause } from "lucide-react";
 
 interface AudioPlayerProps {
@@ -10,12 +18,45 @@ interface AudioPlayerProps {
   autoPlay?: boolean;
 }
 
+interface AudioPlayerGroupContextValue {
+  requestPlayback: (audio: HTMLAudioElement) => void;
+  releasePlayback: (audio: HTMLAudioElement) => void;
+}
+
+const AudioPlayerGroupContext =
+  createContext<AudioPlayerGroupContextValue | null>(null);
+
+export const AudioPlayerGroup: React.FC<React.PropsWithChildren> = ({
+  children,
+}) => {
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const value = useMemo<AudioPlayerGroupContextValue>(
+    () => ({
+      requestPlayback: (audio) => {
+        if (activeAudioRef.current !== audio) activeAudioRef.current?.pause();
+        activeAudioRef.current = audio;
+      },
+      releasePlayback: (audio) => {
+        if (activeAudioRef.current === audio) activeAudioRef.current = null;
+      },
+    }),
+    [],
+  );
+
+  return (
+    <AudioPlayerGroupContext.Provider value={value}>
+      {children}
+    </AudioPlayerGroupContext.Provider>
+  );
+};
+
 export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   src: initialSrc,
   onLoadRequest,
   className = "",
   autoPlay = false,
 }) => {
+  const group = useContext(AudioPlayerGroupContext);
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -87,12 +128,19 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     };
 
     const handleEnded = () => {
+      group?.releasePlayback(audio);
       setIsPlaying(false);
       setCurrentTime(audio.duration || 0);
     };
 
-    const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
+    const handlePlay = () => {
+      group?.requestPlayback(audio);
+      setIsPlaying(true);
+    };
+    const handlePause = () => {
+      group?.releasePlayback(audio);
+      setIsPlaying(false);
+    };
 
     audio.addEventListener("loadedmetadata", handleLoadedMetadata);
     audio.addEventListener("ended", handleEnded);
@@ -100,12 +148,13 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     audio.addEventListener("pause", handlePause);
 
     return () => {
+      group?.releasePlayback(audio);
       audio.removeEventListener("loadedmetadata", handleLoadedMetadata);
       audio.removeEventListener("ended", handleEnded);
       audio.removeEventListener("play", handlePlay);
       audio.removeEventListener("pause", handlePause);
     };
-  }, []);
+  }, [group]);
 
   // Auto-play when src becomes available (via onLoadRequest or autoPlay prop)
   const prevLoadedSrc = useRef<string | null>(null);
@@ -260,7 +309,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           onTouchStart={handleSliderTouchStart}
           className={`flex-1 h-1 rounded-lg appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-logo-primary ${progressPercent >= 99.5 ? "[&::-webkit-slider-thumb]:translate-x-0.5 [&::-moz-range-thumb]:translate-x-0.5" : ""}`}
           style={{
-            background: `linear-gradient(to right, var(--color-logo-primary) 0%, var(--color-logo-primary) ${progressPercent}%, rgba(128, 141, 163, 0.2) ${progressPercent}%, rgba(128, 141, 163, 0.2) 100%)`,
+            background: `linear-gradient(to right, var(--color-logo-primary) 0%, var(--color-logo-primary) ${progressPercent}%, color-mix(in srgb, var(--color-mid-gray) 20%, transparent) ${progressPercent}%, color-mix(in srgb, var(--color-mid-gray) 20%, transparent) 100%)`,
           }}
         />
 

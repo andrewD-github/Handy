@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   AppSettings as Settings,
   AudioDevice,
-  WhisperAcceleratorSetting,
+  TranscribeAcceleratorSetting,
   OrtAcceleratorSetting,
 } from "@/bindings";
 import { commands } from "@/bindings";
@@ -88,23 +88,25 @@ const settingUpdaters: {
     commands.changeAutostartSetting(value as boolean),
   update_checks_enabled: (value) =>
     commands.changeUpdateChecksSetting(value as boolean),
+  show_whats_new_on_update: (value) =>
+    commands.changeShowWhatsNewOnUpdateSetting(value as boolean),
+  whats_new_last_seen_version: (value) =>
+    commands.changeWhatsNewLastSeenVersionSetting(value as string),
   push_to_talk: (value) => commands.changePttSetting(value as boolean),
-  dictation_stability_mode: (value) =>
-    commands.changeDictationStabilityModeSetting(value as string),
-  voice_finish_trigger_enabled: (value) =>
-    commands.changeVoiceFinishTriggerEnabledSetting(value as boolean),
-  voice_finish_phrases: (value) =>
-    commands.updateVoiceFinishPhrases(value as string[]),
-  voice_finish_phrase_variants: (value) =>
-    commands.updateVoiceFinishPhraseVariants(value as string[]),
-  game_mode_auto_unload: (value) =>
-    commands.changeGameModeAutoUnloadSetting(value as boolean),
   selected_microphone: (value) =>
     commands.setSelectedMicrophone(
       (value as string) === "Default" || value === null
         ? "default"
         : (value as string),
     ),
+  selected_channel: async (value) => {
+    const result = await commands.setSelectedChannel(
+      (value as number | null | undefined) ?? null,
+    );
+    if (result.status === "error") {
+      throw new Error(result.error);
+    }
+  },
   clamshell_microphone: (value) =>
     commands.setClamshellMicrophone(
       (value as string) === "Default" ? "default" : (value as string),
@@ -129,6 +131,10 @@ const settingUpdaters: {
     commands.changeWordCorrectionThresholdSetting(value as number),
   paste_delay_ms: (value) =>
     commands.changePasteDelayMsSetting(value as number),
+  paste_delay_after_ms: (value) =>
+    commands.changePasteDelayAfterMsSetting(value as number),
+  reliable_paste: (value) =>
+    commands.changeReliablePasteSetting(value as boolean),
   paste_method: (value) => commands.changePasteMethodSetting(value as string),
   typing_tool: (value) => commands.changeTypingToolSetting(value as string),
   external_script_path: (value) =>
@@ -149,20 +155,27 @@ const settingUpdaters: {
     commands.changeAppendTrailingSpaceSetting(value as boolean),
   log_level: (value) => commands.setLogLevel(value as any),
   app_language: (value) => commands.changeAppLanguageSetting(value as string),
+  theme: (value) => commands.changeThemeSetting(value as string),
   experimental_enabled: (value) =>
     commands.changeExperimentalEnabledSetting(value as boolean),
   lazy_stream_close: (value) =>
     commands.changeLazyStreamCloseSetting(value as boolean),
+  overlay_style: (value) => commands.changeOverlayStyleSetting(value as string),
+  progressive_output_mode: (value) =>
+    commands.changeProgressiveOutputModeSetting(value as string),
+  vad_enabled: (value) => commands.changeVadEnabledSetting(value as boolean),
+  filler_word_removal_enabled: (value) =>
+    commands.changeFillerWordRemovalEnabledSetting(value as boolean),
   show_tray_icon: (value) =>
     commands.changeShowTrayIconSetting(value as boolean),
-  whisper_accelerator: (value) =>
-    commands.changeWhisperAcceleratorSetting(
-      value as WhisperAcceleratorSetting,
+  transcribe_accelerator: (value) =>
+    commands.changeTranscribeAcceleratorSetting(
+      value as TranscribeAcceleratorSetting,
     ),
   ort_accelerator: (value) =>
     commands.changeOrtAcceleratorSetting(value as OrtAcceleratorSetting),
-  whisper_gpu_device: (value) =>
-    commands.changeWhisperGpuDevice(value as number),
+  transcribe_gpu_device: (value) =>
+    commands.changeTranscribeGpuDevice(value as string | null),
   extra_recording_buffer_ms: (value) =>
     commands.changeExtraRecordingBufferSetting(value as number),
 };
@@ -203,17 +216,6 @@ export const useSettingsStore = create<SettingsStore>()(
           const normalizedSettings: Settings = {
             ...settings,
             always_on_microphone: settings.always_on_microphone ?? false,
-            dictation_stability_mode:
-              settings.dictation_stability_mode ?? "stable_live",
-            voice_finish_trigger_enabled:
-              settings.voice_finish_trigger_enabled ?? true,
-            voice_finish_phrases: settings.voice_finish_phrases ?? [
-              "finish dictation",
-              "end dictation",
-              "send it",
-            ],
-            voice_finish_phrase_variants:
-              settings.voice_finish_phrase_variants ?? [],
             selected_microphone: settings.selected_microphone ?? "Default",
             clamshell_microphone: settings.clamshell_microphone ?? "Default",
             selected_output_device:
@@ -350,7 +352,7 @@ export const useSettingsStore = create<SettingsStore>()(
                 bindings: {
                   ...state.settings.bindings,
                   [id]: {
-                    ...state.settings.bindings[id]!,
+                    ...state.settings.bindings?.[id]!,
                     current_binding: binding,
                   },
                 },
@@ -381,7 +383,7 @@ export const useSettingsStore = create<SettingsStore>()(
                   bindings: {
                     ...state.settings.bindings,
                     [id]: {
-                      ...state.settings.bindings[id]!,
+                      ...state.settings.bindings?.[id]!,
                       current_binding: originalBinding,
                     },
                   },
@@ -611,6 +613,12 @@ export const useSettingsStore = create<SettingsStore>()(
       // reset during model switch). The backend is the source of truth.
       listen("model-state-changed", () => {
         get().refreshSettings();
+      });
+      listen<{ setting?: string }>("settings-changed", (event) => {
+        get().refreshSettings();
+        if (event.payload.setting === "selected_microphone") {
+          get().refreshAudioDevices();
+        }
       });
     },
   })),

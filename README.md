@@ -21,9 +21,8 @@ Handy isn't trying to be the best speech-to-text app—it's trying to be the mos
 
 1. **Press** a configurable keyboard shortcut to start/stop recording (or use push-to-talk mode)
 2. **Speak** your words while the shortcut is active
-3. **Watch** live dictation appear progressively when a live stability mode is enabled
-4. **Finish** by pressing the shortcut again or saying a configured finish phrase
-5. **Get** a final full-utterance pass that can reconcile the live text for accuracy
+3. **Release** and Handy processes your speech using Whisper
+4. **Get** your transcribed text pasted directly into whatever app you're using
 
 The process is entirely local:
 
@@ -32,34 +31,6 @@ The process is entirely local:
   - **Whisper models** (Small/Medium/Turbo/Large) with GPU acceleration when available
   - **Parakeet V3** - CPU-optimized model with excellent performance and automatic language detection
 - Works on Windows, macOS, and Linux
-
-## Dictation Workflow Additions
-
-This branch adds a dictation workflow aimed at long-form prompts, coding
-assistants, and ChatGPT-style text boxes.
-
-- **Progressive dictation** types live interim text while recording continues.
-- **Dictation Stability** modes let you choose between Stable Live, Fast Live,
-  and Final Only behavior.
-- **Voice Finish Trigger** lets spoken phrases such as `finish dictation`,
-  `end dictation`, or `send it` stop recording like pressing the transcribe
-  shortcut.
-- **Final reconciliation** runs a full transcript over the complete recording and
-  can replace the live text when the final pass is more accurate.
-- **Overlay diagnostics** show compact live edit metrics while recording.
-- **Diagnostic capture** can write per-session JSONL logs linked to saved WAV
-  files, so transcription speed, accuracy, and edit churn can be reviewed later.
-- **Accuracy scoring** includes a repeatable reference passage and WER/CER script.
-
-Full operator documentation is in
-[docs/dictation-workflow.md](docs/dictation-workflow.md).
-
-Useful review commands:
-
-```bash
-bun run diagnostics:summary
-python accuracy_test/score.py
-```
 
 ## Quick Start
 
@@ -93,7 +64,7 @@ Handy is built as a Tauri application combining:
 - **Frontend**: React + TypeScript with Tailwind CSS for the settings UI
 - **Backend**: Rust for system integration, audio processing, and ML inference
 - **Core Libraries**:
-  - `whisper-rs`: Local speech recognition with Whisper models
+  - `transcribe-cpp`: Local speech recognition with Whisper-family models (GGML/GGUF)
   - `transcribe-rs`: CPU-optimized speech recognition with Parakeet models
   - `cpal`: Cross-platform audio I/O
   - `vad-rs`: Voice Activity Detection
@@ -144,6 +115,18 @@ handy --start-hidden --no-tray
 
 This project is actively being developed and has some [known issues](https://github.com/cjpais/Handy/issues). We believe in transparency about the current state:
 
+### Bluetooth Headset Microphones (macOS)
+
+Using a Bluetooth headset microphone on macOS may temporarily reduce playback quality or volume while recording because Bluetooth switches to bidirectional audio. Keep your headphones as the output device and select your Mac's built-in or an external microphone in Handy to avoid this.
+
+### fn and Globe Key Shortcuts (macOS)
+
+Shortcuts that include the `fn` (Globe) key **only work on Apple keyboards** — your Mac's built-in keyboard or an Apple external keyboard. They will never trigger on a third-party keyboard, even while it is connected to the same Mac.
+
+This is a hardware limitation rather than a Handy bug. `fn` is not part of the standard USB HID keyboard specification: Apple reports it through a vendor-specific usage that macOS honors only from Apple devices, while third-party keyboards handle their `Fn` key entirely in firmware and send nothing to the computer. There is no event for Handy to listen for.
+
+If you switch between a MacBook keyboard and an external one, pick a shortcut built from standard modifiers (`ctrl`, `option`, `shift`, `command`) or a regular key instead.
+
 ### Major Issues (Help Wanted)
 
 **Whisper Model Crashes:**
@@ -170,6 +153,7 @@ For reliable text input on Linux, install the appropriate tool for your display 
 | Both           | `dotool`         | `sudo apt install dotool` (requires `input` group) |
 
 - **X11**: Install `xdotool` for both direct typing and clipboard paste shortcuts
+- **Ubuntu 26.04**: Has Wayland display server by default. `wtype` does not work, you need to install `ydotool` and configure systemd as described [here](https://github.com/cjpais/Handy/pull/557#issuecomment-3781249267).
 - **Wayland**: Install `wtype` (preferred) or `dotool` for text input to work correctly
 - **dotool setup**: Requires adding your user to the `input` group: `sudo usermod -aG input $USER` (then log out and back in)
 
@@ -223,21 +207,23 @@ Without these tools, Handy falls back to enigo which may have limited compatibil
   bind = $mainMod, O, exec, handy --toggle-transcription
   ```
 
-- You can also manage global shortcuts outside of Handy via Unix signals, which lets Wayland window managers or other hotkey daemons keep ownership of keybindings:
+- You can also trigger Handy externally via Unix signals or the CLI flags, which lets Wayland window managers or other hotkey daemons keep ownership of keybindings:
 
-  | Signal    | Action                                    | Example                |
-  | --------- | ----------------------------------------- | ---------------------- |
-  | `SIGUSR2` | Toggle transcription                      | `pkill -USR2 -n handy` |
-  | `SIGUSR1` | Toggle transcription with post-processing | `pkill -USR1 -n handy` |
+  | Action                                    | Trigger                                                  |
+  | ----------------------------------------- | -------------------------------------------------------- |
+  | Toggle transcription                      | `pkill -USR2 -n handy` or `handy --toggle-transcription` |
+  | Toggle transcription with post-processing | `handy --toggle-post-process`                            |
 
   Example Sway config:
 
   ```ini
   bindsym $mod+o exec pkill -USR2 -n handy
-  bindsym $mod+p exec pkill -USR1 -n handy
+  bindsym $mod+p exec handy --toggle-post-process
   ```
 
   `pkill` here simply delivers the signal—it does not terminate the process.
+
+  > **Behavior change:** older releases also accepted `SIGUSR1` for toggling transcription with post-processing. WebKitGTK — the webview engine embedded in Handy on Linux — uses SIGUSR1 internally to coordinate JavaScript garbage collection, so listening for it caused phantom recordings and interrupted dictations every few minutes ([#1660](https://github.com/cjpais/Handy/issues/1660)). Handy no longer listens for SIGUSR1 on Linux; the post-processing toggle is still available via `handy --toggle-post-process`. **Remove any `pkill -USR1` bindings**: the signal is now delivered straight to WebKit's internal handler and can crash the app.
 
 **Overlay & Pasting Issues (Linux):**
 
@@ -378,6 +364,10 @@ Download the models you want from below
 - Turbo (1600 MB): `https://blob.handy.computer/ggml-large-v3-turbo.bin`
 - Large (1100 MB): `https://blob.handy.computer/ggml-large-v3-q5_0.bin`
 
+**Parakeet Unified EN 0.6B (single `.gguf` file, recommended):**
+
+- Q8_0 (731 MB): `https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf/resolve/main/parakeet-unified-en-0.6b-Q8_0.gguf`
+
 **Parakeet Models (compressed archives):**
 
 - V2 (473 MB): `https://blob.handy.computer/parakeet-v2-int8.tar.gz`
@@ -396,6 +386,10 @@ Simply place the `.bin` file directly into the `models` directory:
 ├── ggml-large-v3-turbo.bin
 └── ggml-large-v3-q5_0.bin
 ```
+
+**For GGUF Models (.gguf files):**
+
+Place the `.gguf` file directly into the `models` directory, exactly like the Whisper `.bin` files above. Handy also picks up models already present in the shared Hugging Face cache (`~/.cache/huggingface/hub`), so a copy downloaded by another tool works without being moved.
 
 **For Parakeet Models (.tar.gz archives):**
 
@@ -420,7 +414,7 @@ Final structure should look like:
 **Important Notes:**
 
 - For Parakeet models, the extracted directory name **must** match exactly as shown above
-- Do not rename the `.bin` files for Whisper models—use the exact filenames from the download URLs
+- Do not rename the `.bin` or `.gguf` files—use the exact filenames from the download URLs
 - After placing the files, restart Handy to detect the new models
 
 #### Step 5: Verify Installation
@@ -489,6 +483,12 @@ Exec=env HANDY_NO_GTK_LAYER_SHELL=1 handy
 
 If a workaround helps you, please [open an issue](https://github.com/cjpais/Handy/issues) describing your distro, desktop environment, and session type — that information helps us narrow down the underlying bug.
 
+### Handy Starts or Stops Recording on Its Own (Linux)
+
+Handy 0.9.4 and earlier listened for `SIGUSR1` as a remote-control trigger. WebKitGTK — the webview engine embedded in Handy on Linux — uses that same signal internally to coordinate JavaScript garbage collection, so GC cycles were misread as hotkey presses: recordings started on their own, or real dictations were cut off mid-sentence (typically ~2 minutes in). See [#1660](https://github.com/cjpais/Handy/issues/1660).
+
+Update to a newer release, and replace any `pkill -USR1 -n handy` keybindings with `handy --toggle-post-process`.
+
 ### How to Contribute
 
 1. **Check existing issues** at [github.com/cjpais/Handy/issues](https://github.com/cjpais/Handy/issues)
@@ -531,7 +531,7 @@ Handy is open-source software, but the Handy name, logo, icon, and brand assets 
 ## Acknowledgments
 
 - **Whisper** by OpenAI for the speech recognition model
-- **whisper.cpp and ggml** for amazing cross-platform whisper inference/acceleration
+- **ggml and transcribe.cpp** for amazing cross-platform speech-to-text inference/acceleration
 - **Silero** for great lightweight VAD
 - **Tauri** team for the excellent Rust-based app framework
 - **Community contributors** helping make Handy better

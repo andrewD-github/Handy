@@ -1,14 +1,18 @@
 @import "tailwindcss";
+@import "./styles/theme.css";
 
-@theme {
-  /* Design tokens */
-  --color-text: #eaf2ff;
-  --color-background: #08111f;
-  --color-background-ui: #145da0;
-  --color-logo-primary: #4bb8ff;
-  --color-logo-stroke: #b7e4ff;
-  --color-text-stroke: #06101d;
-  --color-mid-gray: #7f8da3;
+/* Register the shared color tokens (src/styles/theme.css) as Tailwind
+   utilities */
+@theme inline {
+  --color-text: var(--color-text);
+  --color-background: var(--color-background);
+  --color-background-ui: var(--color-background-ui);
+  --color-logo-primary: var(--color-logo-primary);
+  --color-logo-stroke: var(--color-logo-stroke);
+  --color-text-stroke: var(--color-text-stroke);
+  --color-mid-gray: var(--color-mid-gray);
+  --color-warning: var(--color-warning);
+  --color-error: var(--color-error);
 }
 
 :root {
@@ -52,14 +56,7 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    /* Colors - Dark Theme */
-    --color-text: #eef6ff;
-    --color-background: #050c17;
-    --color-background-ui: #0e4f8a;
-    --color-logo-primary: #5dc8ff;
-    --color-logo-stroke: #c6ecff;
-    --color-text-stroke: #030914;
-    --color-mid-gray: #8797ad;
+    /* Just a bit darker than the (already dark) background, keeping its warm tint */
     --color-log-surface: color-mix(in srgb, var(--color-background), black 15%);
   }
 }
