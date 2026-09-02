@@ -35,6 +35,9 @@ try {
     if ($installerSource -notmatch [regex]::Escape("[string]`$CandidateRoot = 'D:\Apps\Handy-Candidate-0.9.6-progressive'")) {
         throw 'Installer default candidate path is not pinned to v0.9.6.'
     }
+    if ($installerSource -notmatch [regex]::Escape("Set-JsonProperty -Object `$settings -Name 'direct_prompt_resume_on_refocus' -Value `$true")) {
+        throw 'Installer does not enable direct-prompt refocus resume.'
+    }
     $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $installer -ValidateRollbackFrom (Join-Path $backup 'manifest.json')
     if ($LASTEXITCODE -ne 0 -or $output -notmatch 'complete and verifiable') {
         throw 'Legacy rollback manifest validation failed.'

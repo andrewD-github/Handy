@@ -349,6 +349,7 @@ try {
     $settings = if ($settingsDocument.settings) { $settingsDocument.settings } else { $settingsDocument }
     Set-JsonProperty -Object $settings -Name 'selected_model' -Value $ModelId
     Set-JsonProperty -Object $settings -Name 'progressive_output_mode' -Value 'direct_prompt'
+    Set-JsonProperty -Object $settings -Name 'direct_prompt_resume_on_refocus' -Value $true
     Set-JsonProperty -Object $settings -Name 'onboarding_completed' -Value $true
     $settingsJson = $settingsDocument | ConvertTo-Json -Depth 100
     $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
