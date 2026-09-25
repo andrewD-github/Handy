@@ -318,6 +318,18 @@
           }
         }
       },
+      "progressiveOutput": {
+        "title": "Destinació del text en directe",
+        "description": "Trieu on apareix la transcripció en directe només per addició. L'opció Directament al camp actiu escriu text creixent a l'aplicació on ha començat el dictat, mai no esborra una retracció i requereix un model amb el distintiu En temps real.",
+        "options": {
+          "overlay": "Finestra superposada del Handy",
+          "directPrompt": "Directament al camp actiu"
+        },
+        "resumeOnRefocus": {
+          "label": "Reprèn la sortida directa quan el destí recuperi el focus",
+          "description": "Quan està activada, la sortida directa es pausa mentre hi ha un altre destí actiu i es reprèn quan torna el destí original. Les aplicacions del navegador poden reutilitzar el mateix control després d'Enviar, de manera que el text pendent es pot reprendre en un camp nou."
+        }
+      },
       "pasteMethod": {
         "title": "Mètode d'enganxament",
         "description": "Trieu com s'insereix el text. Directe: simula l'escriptura mitjançant l'entrada del sistema. Cap: no enganxa el text, només actualitza l'historial i el porta-retalls.",

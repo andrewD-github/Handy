@@ -318,6 +318,18 @@
           }
         }
       },
+      "progressiveOutput": {
+        "title": "Tujuan Teks Langsung",
+        "description": "Pilih tempat transkripsi langsung yang hanya menambahkan teks ditampilkan. Langsung di kolom aktif mengetik teks yang terus bertambah ke aplikasi tempat dikte dimulai, tidak pernah menghapus penarikan hipotesis, dan memerlukan model dengan lencana Streaming.",
+        "options": {
+          "overlay": "Overlay Handy",
+          "directPrompt": "Langsung di kolom aktif"
+        },
+        "resumeOnRefocus": {
+          "label": "Lanjutkan keluaran langsung saat target kembali fokus",
+          "description": "Saat diaktifkan, keluaran langsung dijeda ketika target lain aktif dan dilanjutkan saat target asli kembali. Aplikasi browser dapat menggunakan kembali kontrol yang sama setelah Kirim, sehingga teks tertunda dapat dilanjutkan di kolom baru."
+        }
+      },
       "pasteMethod": {
         "title": "Metode Tempel",
         "description": "Pilih cara teks dimasukkan. Langsung: mensimulasikan pengetikan melalui masukan sistem. Tidak Ada: melewati proses tempel dan hanya memperbarui riwayat/papan klip.",
