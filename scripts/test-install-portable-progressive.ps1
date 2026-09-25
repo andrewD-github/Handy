@@ -32,8 +32,11 @@ try {
 
     $installer = Join-Path $PSScriptRoot 'install-portable-progressive.ps1'
     $installerSource = Get-Content -Raw -LiteralPath $installer
-    if ($installerSource -notmatch [regex]::Escape("[string]`$CandidateRoot = 'D:\Apps\Handy-Candidate-0.9.6-progressive'")) {
-        throw 'Installer default candidate path is not pinned to v0.9.6.'
+    if ($installerSource -notmatch [regex]::Escape("[string]`$CandidateRoot = 'D:\Apps\Handy-Candidate-0.9.7-progressive'")) {
+        throw 'Installer default candidate path is not pinned to v0.9.7.'
+    }
+    if ($installerSource -notmatch [regex]::Escape("[string]`$ExpectedExeSha256 = ''")) {
+        throw 'Installer must require the reviewed executable hash at install time.'
     }
     if ($installerSource -notmatch [regex]::Escape("Set-JsonProperty -Object `$settings -Name 'direct_prompt_resume_on_refocus' -Value `$true")) {
         throw 'Installer does not enable direct-prompt refocus resume.'

@@ -1,13 +1,13 @@
 [CmdletBinding(DefaultParameterSetName = 'Install')]
 param(
     [Parameter(ParameterSetName = 'Install')]
-    [string]$CandidateRoot = 'D:\Apps\Handy-Candidate-0.9.6-progressive',
+    [string]$CandidateRoot = 'D:\Apps\Handy-Candidate-0.9.7-progressive',
 
     [Parameter(ParameterSetName = 'Install')]
     [string]$InstallRoot = 'D:\Apps\Handy',
 
     [Parameter(ParameterSetName = 'Install')]
-    [string]$ExpectedExeSha256 = '7B735FE3A74BA1CB3A586942C97E54EC31D30A1A1139DB626DDD1F5D10CBD7C8',
+    [string]$ExpectedExeSha256 = '',
 
     [Parameter(ParameterSetName = 'Install')]
     [switch]$Install,
@@ -244,6 +244,9 @@ if ($PSCmdlet.ParameterSetName -eq 'ValidateRollback') {
 
 if (-not $Install) {
     throw 'Installation is explicit: rerun with -Install after reviewing the candidate and paths.'
+}
+if ([string]::IsNullOrWhiteSpace($ExpectedExeSha256)) {
+    throw 'Installation requires -ExpectedExeSha256 for the reviewed candidate build.'
 }
 
 $CandidateRoot = (Resolve-Path -LiteralPath $CandidateRoot).Path

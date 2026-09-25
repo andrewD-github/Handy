@@ -9,7 +9,8 @@ installation.
 - Baseline dataset: `D:\Apps\Handy\Data\analysis\actual-usage-20260712`
 - Frozen source snapshot: `D:\Apps\Handy\Data\analysis\snapshot-20260712-122337`
 - Verified v0.9.5 outputs: `D:\Apps\Handy\Data\analysis\candidate-0.9.5-progressive`
-- New candidate outputs: `D:\Apps\Handy\Data\analysis\candidate-0.9.6-progressive`
+- Verified v0.9.6 refocus outputs: `D:\Apps\Handy\Data\analysis\candidate-0.9.6-refocus-resume`
+- New candidate outputs: `D:\Apps\Handy\Data\analysis\candidate-0.9.7-progressive`
 - Replay cohort: all 17 exact WAV/history/diagnostic joins from `manifest.json`
 - Join rule: session ID, history ID, exact WAV filename, and corroborating
   timestamps; never directory order
