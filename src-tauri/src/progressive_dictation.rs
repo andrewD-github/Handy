@@ -947,6 +947,23 @@ mod tests {
     }
 
     #[test]
+    fn final_text_is_inserted_once_when_script_previews_were_withheld() {
+        let target = TargetIdentity::test(10, 20);
+        let editor = Arc::new(FakeEditor::new(target));
+        let mut coordinator = ProgressiveCoordinator::new(Arc::clone(&editor));
+        coordinator.start(7, target, RefocusPolicy::Stop);
+
+        assert_eq!(
+            coordinator.finish(7, "我们今天去学校"),
+            ProgressiveCompletion {
+                decision: ProgressiveDecision::Append("我们今天去学校".into()),
+                owns_output: true,
+            }
+        );
+        assert_eq!(editor.inserts(), vec!["我们今天去学校"]);
+    }
+
+    #[test]
     fn new_generation_makes_old_updates_and_finalization_stale() {
         let target = TargetIdentity::test(10, 20);
         let editor = Arc::new(FakeEditor::new(target));

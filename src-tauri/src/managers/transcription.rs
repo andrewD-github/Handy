@@ -1048,7 +1048,8 @@ impl TranscriptionManager {
                                         &languages,
                                     );
                                     self.emit_stream_text(
-                                        progressive_generation,
+                                        progressive_generation
+                                            .filter(|_| preview_script.safe_for_progressive()),
                                         &committed,
                                         &tentative,
                                     );
@@ -1912,6 +1913,14 @@ impl PreviewScript {
         }
     }
 
+    /// Script conversion can revise an earlier preview prefix, including when
+    /// language detection arrives late or a phrase crosses a commit boundary.
+    /// The direct prompt is append-only, so keep those previews in the overlay
+    /// and let its finalization insert the fully converted text once.
+    fn safe_for_progressive(&self) -> bool {
+        self.script == ChineseScript::AsTranscribed || (!self.detect && self.variety.is_none())
+    }
+
     /// Converts the model's raw committed/tentative text. Always fed the raw
     /// text, never a previous conversion, so it stays consistent with the
     /// final conversion. Once Chinese is detected it sticks for the rest of
@@ -2406,6 +2415,37 @@ mod tests {
         );
 
         assert_eq!(result, "我们今天下午一起去学校图书馆看书，然后再去吃晚饭。");
+    }
+
+    #[test]
+    fn script_conversion_never_streams_into_append_only_direct_prompt() {
+        let supported = languages(&["zh", "en", "ja"]);
+        let mut auto =
+            PreviewScript::new(ChineseScript::Simplified, &OutputLanguageEvidence::Unknown);
+        assert!(!auto.safe_for_progressive());
+        auto.convert("我們今天", "下午一起去學校", &supported);
+        assert!(!auto.safe_for_progressive());
+
+        let chinese = PreviewScript::new(
+            ChineseScript::Traditional,
+            &OutputLanguageEvidence::UserSelected("zh".to_string()),
+        );
+        assert!(!chinese.safe_for_progressive());
+    }
+
+    #[test]
+    fn unchanged_script_can_stream_into_direct_prompt() {
+        let original = PreviewScript::new(
+            ChineseScript::AsTranscribed,
+            &OutputLanguageEvidence::Unknown,
+        );
+        assert!(original.safe_for_progressive());
+
+        let english = PreviewScript::new(
+            ChineseScript::Simplified,
+            &OutputLanguageEvidence::UserSelected("en".to_string()),
+        );
+        assert!(english.safe_for_progressive());
     }
 
     #[test]

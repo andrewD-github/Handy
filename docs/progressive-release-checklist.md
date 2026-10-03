@@ -68,6 +68,9 @@ Run the isolated portable candidate, not the installed executable.
 - [ ] With refocus resume disabled, a pointer click during a session prevents
       all later prompt insertion.
 - [ ] Stop with F4 appends at most the measured final tail once.
+- [ ] With Chinese script conversion enabled, the live overlay may update, but
+      direct-prompt insertion waits for the final converted text and inserts it
+      exactly once.
 - [ ] Cancel produces no late text.
 - [ ] Rapid F4 restart makes every previous-generation update stale.
 - [ ] Switching focus prevents edits in both the old and new target.
