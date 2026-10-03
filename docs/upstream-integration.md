@@ -4,11 +4,11 @@ This branch keeps the progressive-dictation customization as a small patch stack
 
 ## Current base
 
-- Stable upstream tag: `v0.9.7` (`05e0aedd`)
-- The complete v0.9.7 history is merged; audio-tail capture, real-time-safe
-  microphone transport, shortcut parity, model recovery, Windows overlay
-  scaling, WebView accelerator-key handling, and transcribe-cpp 0.2.3 remain
-  upstream-owned.
+- Stable upstream tag: `v0.9.8` (`14f6f0d`)
+- The complete v0.9.8 history is merged. Upstream owns recording cleanup,
+  shortcut validation and cancel reconciliation, history clipboard feedback,
+  filler cleanup, compute-device startup, Chinese script conversion, and
+  transcribe-cpp 0.2.4, alongside the earlier v0.9.7 fixes.
 - Integration branch: `codex/handy-progressive-dictation`
 - Rejected experiment preserved outside the branch: stash `rejected-target-content-guard-experiment-before-0.9.5-port`
 

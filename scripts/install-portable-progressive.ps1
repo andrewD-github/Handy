@@ -1,7 +1,7 @@
 [CmdletBinding(DefaultParameterSetName = 'Install')]
 param(
     [Parameter(ParameterSetName = 'Install')]
-    [string]$CandidateRoot = 'D:\Apps\Handy-Candidate-0.9.7-progressive',
+    [string]$CandidateRoot = 'D:\Apps\Handy-Candidate-0.9.8-progressive',
 
     [Parameter(ParameterSetName = 'Install')]
     [string]$InstallRoot = 'D:\Apps\Handy',

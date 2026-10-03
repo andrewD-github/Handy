@@ -32,8 +32,8 @@ try {
 
     $installer = Join-Path $PSScriptRoot 'install-portable-progressive.ps1'
     $installerSource = Get-Content -Raw -LiteralPath $installer
-    if ($installerSource -notmatch [regex]::Escape("[string]`$CandidateRoot = 'D:\Apps\Handy-Candidate-0.9.7-progressive'")) {
-        throw 'Installer default candidate path is not pinned to v0.9.7.'
+    if ($installerSource -notmatch [regex]::Escape("[string]`$CandidateRoot = 'D:\Apps\Handy-Candidate-0.9.8-progressive'")) {
+        throw 'Installer default candidate path is not pinned to v0.9.8.'
     }
     if ($installerSource -notmatch [regex]::Escape("[string]`$ExpectedExeSha256 = ''")) {
         throw 'Installer must require the reviewed executable hash at install time.'

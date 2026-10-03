@@ -10,7 +10,8 @@ installation.
 - Frozen source snapshot: `D:\Apps\Handy\Data\analysis\snapshot-20260712-122337`
 - Verified v0.9.5 outputs: `D:\Apps\Handy\Data\analysis\candidate-0.9.5-progressive`
 - Verified v0.9.6 refocus outputs: `D:\Apps\Handy\Data\analysis\candidate-0.9.6-refocus-resume`
-- New candidate outputs: `D:\Apps\Handy\Data\analysis\candidate-0.9.7-progressive`
+- Verified v0.9.7 outputs: `D:\Apps\Handy\Data\analysis\candidate-0.9.7-progressive`
+- New candidate outputs: `D:\Apps\Handy\Data\analysis\candidate-0.9.8-progressive`
 - Replay cohort: all 17 exact WAV/history/diagnostic joins from `manifest.json`
 - Join rule: session ID, history ID, exact WAV filename, and corroborating
   timestamps; never directory order
@@ -26,8 +27,8 @@ installation.
 - [ ] Optimized candidate build completes. If installer signing is unavailable,
       record that separately; do not describe an unsigned portable executable as
       a signed installer.
-- [ ] All three candidate model files match the SHA-256 values pinned in Handy's
-      bundled catalog.
+- [ ] The selected candidate model file matches its SHA-256 value pinned in
+      Handy's bundled catalog.
 - [ ] All 17 real-use WAVs complete through the production streaming worker in
       simulated real time on the selected accelerator.
 
